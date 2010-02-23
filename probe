@@ -1,0 +1,65 @@
+#!/bin/bash
+
+NAME=probe
+VERSION=0.1.1
+BLOCKS="KJ01_32_1 KJ02_32_1 KJ03_32_1 KJ04_32_1 KJ05_32_1 KJ00_32_1"
+
+function help()
+{
+    echo -e "\`$NAME' automates grabbing a Blue Gene block\n" \
+	    "\n"                                              \
+	    "Usage: $NAME\n"                                  \
+	    " -?, --help      Show this help statement.\n"    \
+	    "     --version   Show version statement.\n"      \
+	    "\n"                                              \
+	    "Examples: $NAME\n"
+}
+
+function probe()
+{
+    for block in $BLOCKS; do
+        log=0.$block.log
+
+        killall -u $USER mmcs_db_console 2> /dev/null 1> /dev/null
+	rm -f 0.*.log
+        sleep 1
+
+	boot $block > $log &
+
+        while true; do
+            sleep 1
+            egrep -q "mmcs_server_cmd: FAIL;block not selected" $log && {
+                echo "STATE BAD: $block"
+                continue 2
+            }
+            c=$(grep OK $log | wc -l)
+            test $c -gt 4 && {
+                echo "STATE GOOD: $block"
+                break 2
+            }
+        done
+    done
+
+    return 0
+}
+
+function main()
+{
+    while [ $# -gt 0 ]; do
+        case $1 in
+        --version)
+            echo "$NAME $VERSION"
+            return 1
+            ;;
+        *)
+            help
+            return 1
+        esac
+    done
+
+    probe
+    return $?
+}
+
+main "$@";
+exit $?;

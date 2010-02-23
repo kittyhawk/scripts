@@ -1,0 +1,201 @@
+#!/bin/bash
+# just a kludge needs to be re-written
+# added support to multi disk requests
+#set -x
+
+# FIXME:
+# there is big sequential loops here probably
+# does not matter right now as aoe id's
+# only range from {0..9} * {0..15}  
+
+
+export PATH=$PATH:/root/scripts
+declare -r DISKINFODIR=${KHDISK_INFODIR:-/root/disks}
+declare -r AOEIDFILE=$DISKINFODIR/aoenextid
+declare -i BUFFERCONFIG=1
+
+if [[ ! -d $DISKINFODIR ]]
+then
+  if [[ -a $DISKINFODIR ]]
+  then
+     if ! rm -rf $DISKINFODIR
+     then
+       echo "ERROR: $DISKINFODIR exists and is not a directory and cannot be removed" >&2
+       exit -1
+     fi
+  fi
+  mkdir -p $DISKINFODIR
+fi
+
+function resetAOEID {
+   local id="$1"
+
+   if [[ -z "$id" ]]
+   then
+      id="0 0"
+   fi
+   echo "$id" > $AOEIDFILE
+   return 0      
+}
+
+function getAOEID
+{
+  #add locking to this
+  local shelf
+  local slot
+  local nextshelf
+  local nextslot
+  local aoeid
+
+  if [[ ! -a $AOEIDFILE  ]]
+  then
+      resetAOEID
+  fi
+  aoeid=$(cat $AOEIDFILE)
+  shelf=${aoeid%% *}
+  slot=${aoeid##* }
+
+  if (( $slot > 15 ))
+  then
+    echo "ERROR: exceed max aoe slots $slot" >&2
+    exit -1
+  fi
+  if (( $shelf > 9 ))
+  then
+    echo "ERROR: exceed max aoe shelves $shelf" >&2
+    exit -1
+  fi
+  nextslot=$(( $slot + 1 ))
+  if (( $nextslot > 15 ))
+  then
+    nextshelf=$(( $shelf + 1 ))
+    nextslot=0
+  else
+    nextshelf=$shelf
+  fi
+  echo "$nextshelf $nextslot" > $AOEIDFILE
+  echo "$shelf $slot"
+  return 0
+}
+
+aoeethaddr=$1
+num=$2
+
+if [[ -z $aoeethaddr ]]
+then
+  echo "USAGE: $0 <comma seperated list of macs> [number]"
+  exit -1
+fi
+
+if [[ -z $num ]]
+then
+   num=1
+fi
+
+if [[ -z $aoeeth && -a /proc/device-tree/u-boot-env/aoe_iface ]]
+then
+   aoeeth=$(cat /proc/device-tree/u-boot-env/aoe_iface)
+fi
+
+if [[ -z $aoenetid && -a /proc/device-tree/u-boot-env/bg_${aoeeth}_netid ]]
+then
+  aoenetid=$(cat /proc/device-tree/u-boot-env/bg_${aoeeth}_netid)
+fi
+
+if [[ -z $ramdisk && -a /root/vblade.cpio.gz.uimg ]]
+then
+   ramdisk=/root/vblade.cpio.gz.uimg
+fi
+
+if [[ -z $khuser && -a /proc/device-tree/u-boot-env/khctluser ]]
+then
+   khuser=$(cat /proc/device-tree/u-boot-env/khctluser)
+fi
+
+if [[ -z $ramdisk || -z $khuser || -z $aoenetid || -z $aoeeth ]]
+then
+  echo "ERROR: Could not determine values" >&2
+  exit -1
+fi
+
+if ! ifconfig $aoeeth up
+then
+  echo "ERROR: failed to config ethernet inteface $aoeeth" >&2
+  exit -1 
+else
+  myethaddr=$(ifconfig $aoeeth | grep HWaddr)
+  myethaddr=${myethaddr##*HWaddr }
+fi
+
+if [[ -z $aoeethaddr ]]
+then
+  aoeethaddr=$myethaddr
+fi
+
+# FIXME: HERE IS THE LOOP SEE TOP COMMENT
+# all the ids first to ensure that 
+# we have enough ids
+declare -i i=0
+declare -a aoeids
+while (( $i < $num ))
+do
+  aoeids[$i]=$(getAOEID)
+  if (( $? != 0 ))
+  then
+     if (( $i > 0 ))
+     then
+        resetNextAOEid "${aoeids[0]}"
+     fi
+     echo "ERROR: need $num aoe disk ids but only got $(( $i + 1 ))" >&2
+     exit -1
+  fi
+  (( i++ ))
+done
+
+disks=$(khget -n $aoenetid $khuser $num)
+
+if (( $? != 0 ))
+then
+  echo "ERROR: failed to acquire $num nodes for disk" >&2
+  exit -1
+fi
+
+echo "$disks" | khdo loadramdisk $ramdisk
+
+nodes=$(echo "$disks" | khdo pernodecmd "echo %node%")
+i=0
+for n in $nodes
+do
+  aoeid="${aoeids[$i]}"
+  shelf=${aoeid%% *}
+  slot=${aoeid##* }
+  configline="itest \$bgp_rank == $n && setenv app_aoe_shelf $shelf && setenv app_aoe_slot $slot && setenv app_aoe_eth eth0"
+  if (( $BUFFERCONFIG == 1 ))
+  then
+    if [[ -z $config ]]
+    then
+      config="$configline"
+    else
+      config="$config
+$configline"
+    fi
+  else 
+    echo "$disks" | khdo write "$configline"
+  fi
+  echo "$disks" > $DISKINFODIR/e${shelf}.${slot}.info
+  (( i++ ))
+done
+
+if (( $BUFFERCONFIG == 1 ))
+then
+   echo "$disks" | khdo write "$config"
+fi
+
+if [[ -n $aoeethaddr ]]
+then
+  echo "$disks" | khdo write "setenv app_aoe_macs $aoeethaddr"
+fi
+
+echo "$disks" | khdo write 'setenv ramfsarg $ramfsaddr && setenv bootargs console=bgtty0,$bgtty_sendid,$bgtty_rcvid,$bgtty_dest init=/init && imi $ramfsarg && run boot'
+
+

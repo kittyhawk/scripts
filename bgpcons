@@ -1,0 +1,14 @@
+#!/bin/bash
+block=$1
+ipprefix=192.168.$block
+nodes=$(seq 4 35)
+cols=80
+rows=3
+conpgm=netcat
+conargs="-u -l -p"
+portprefix=50
+
+for node in $nodes
+do
+   xterm -display $DISPLAY -geometry ${cols}x${rows} -e $conpgm $conargs ${portprefix}${block}${node} &
+done

@@ -1,0 +1,322 @@
+#!/usr/bin/gmake -f
+
+BLOCK = r001n10-c32i1
+RELEASE = stable
+LIBRARY = http://yktgsa.ibm.com/home/a/w/awaterl/pub/kittyhawk/initramfs
+NETPERF.CPIO = $(LIBRARY)/netperf/powerpc/netperf-2008-06-11.cpio.gz
+SPECINT.CPIO = $(LIBRARY)/specint2006/powerpc/specinttest-2008-06-03.cpio.gz
+SPECJBB.CPIO = $(LIBRARY)/specjbb2005/powerpc/specjbb2005-2008-06-02.cpio.gz
+SSH = ssh -o UserKnownHostsFile=known_hosts -l root
+NETPERF = netperf -p 4242
+
+BRIDGETUNE = echo 1000000 > /proc/sys/net/core/rmem_max; \
+             echo 7 > /proc/irq/181/smp_affinity;        \
+             echo 100 > /proc/irq/181/rotation_interval
+
+TORUSTUNE = echo 1000000 > /proc/sys/net/core/rmem_max; \
+            echo 3 > /proc/irq/92/smp_affinity;         \
+            echo 100 > /proc/irq/92/rotation_interval;  \
+            echo 4 > /proc/irq/96/smp_affinity;         \
+            echo 0 > /proc/irq/96/rotation_interval
+
+################################################################################
+
+help:
+	@echo -e "\`regress' automates the Kittyhawk testsuite\n\n"            \
+          "usage: regress GOAL [VARIABLES]\n\n"                                \
+          "note: GOALs are netperf specint specjbb clean mrproper ...\n\n" \
+          "example: regress specjbb RELEASE=2008-06-10 BLOCK=r001n04-c32i1-kh\n"
+
+all: netperf specint specjbb score
+
+netperf: netperf.csv
+specint: specinttest.csv
+specjbb: specjbb.csv
+score: score.csv
+
+netperf.bridge: netperf.bridge.1000.bw.udp.score
+netperf.torus: netperf.torus.1000.bw.udp.score
+
+################################################################################
+
+score.csv: netperf.bridge.1000.bw.udp.score netperf.torus.1000.bw.udp.score \
+           specjbb.score specint.score
+	printf "%s, %s, %s, %s, %s\n" \
+               "DATE"                 \
+               "BRIDGE 1000 BW UDP"   \
+               "TORUS 1000 BW UDP"    \
+               "SPECJBB"              \
+               "SPECINT"              \
+               $(shell date +%s)      \
+               $(shell cat $^) > $@
+
+################################################################################
+
+f1 = "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n"
+
+netperf.csv: netperf.raw uImage.elf.md5 netperf.cpio.gz.md5
+	printf $(f1)                            \
+               "RELEASE"                        \
+               "DATE"                           \
+               "KERNEL"                         \
+               "RAMDISK"                        \
+               "BRIDGE TCP"                     \
+               "BRIDGE 200 LAT UDP"             \
+               "BRIDGE 1000 LAT UDP"            \
+               "BRIDGE 200 BW UDP"              \
+               "BRIDGE 1000 BW UDP"             \
+               "TORUS 200 LAT TCP"              \
+               "TORUS 1000 LAT TCP"             \
+               "TORUS 200 BW TCP"               \
+               "TORUS 1000 BW TCP"              \
+               "TORUS 200 LAT UDP"              \
+               "TORUS 1000 LAT UDP"             \
+               "TORUS 200 BW UDP"               \
+               "TORUS 1000 BW UDP"              \
+               $(RELEASE)                       \
+               $(shell date +%s)                \
+               $(shell cat uImage.elf.md5)      \
+               $(shell cat netperf.cpio.gz.md5) \
+               $(shell cat $<) > $@
+
+netperf.raw: netperf.bridge.tcp.score           \
+             netperf.bridge.200.lat.udp.score   \
+             netperf.bridge.1000.lat.udp.score  \
+             netperf.bridge.200.bw.udp.score    \
+             netperf.bridge.1000.bw.udp.score   \
+             netperf.torus.200.lat.tcp.score    \
+             netperf.torus.1000.lat.tcp.score   \
+             netperf.torus.200.bw.tcp.score     \
+             netperf.torus.1000.bw.tcp.score    \
+             netperf.torus.200.lat.udp.score    \
+             netperf.torus.1000.lat.udp.score   \
+             netperf.torus.200.bw.udp.score     \
+             netperf.torus.1000.bw.udp.score
+	cat $^ > $@
+
+################################################################################
+
+netperf.bridge.tcp.score: netperf.bridge.tcp.log
+	awk '{print $$5}' $< | tail -n 1 > $@
+
+netperf.bridge.tcp.log: netperf.netserver.log
+	$(NETPERF) -H $(N) > $@
+
+################################################################################
+
+%.lat.udp.score: %.lat.udp.log %.lat.udp.after.io.dropped                \
+                 %.lat.udp.after.io.ifconfig %.lat.udp.after.cn.ifconfig \
+                 %.lat.udp.after.sn.ifconfig
+	awk '{print $$6}' $< | tail -2 | head -1 > $@
+
+%.lat.tcp.score: %.lat.tcp.log %.lat.tcp.after.io.dropped                \
+                 %.lat.tcp.after.io.ifconfig %.lat.tcp.after.cn.ifconfig \
+                 %.lat.tcp.after.sn.ifconfig
+	awk '{print $$6}' $< | tail -2 | head -1 > $@
+
+%.bw.tcp.score: %.bw.tcp.log %.bw.tcp.after.io.dropped                   \
+                 %.bw.tcp.after.io.ifconfig %.bw.tcp.after.cn.ifconfig   \
+                 %.bw.tcp.after.sn.ifconfig
+	awk '{print $$5}' $< | tail -1 > $@
+
+%.bw.udp.score: %.bw.udp.log %.bw.udp.after.io.dropped                   \
+                 %.bw.udp.after.io.ifconfig %.bw.udp.after.cn.ifconfig   \
+                 %.bw.udp.after.sn.ifconfig
+	awk '{print $$4}' $< | tail -2 | head -1 > $@
+
+%.udp.score: %.udp.log %.udp.after.io.dropped %.udp.after.io.ifconfig    \
+             %.udp.after.cn.ifconfig %.udp.after.sn.ifconfig
+	awk '{print $$4}' $< | tail -2 | head -1 > $@
+
+################################################################################
+
+netperf.bridge.%.bw.udp.log: netperf.bridge.%.bw.udp.setup
+	$(NETPERF) -H $(N) -t UDP_STREAM -T3,3 -- -S,1000000 -m $* -M $* > $@
+
+netperf.bridge.%.lat.udp.log: netperf.bridge.%.lat.udp.setup
+	$(NETPERF) -H $(N) -t UDP_RR -T3,3 -- -S,1000000 -r $*,$* > $@
+
+netperf.torus.%.lat.tcp.log: netperf.torus.%.lat.tcp.setup
+	$(SSH) $(Q) $(NETPERF) -H $(P) -t TCP_RR -T1,1 -- -r $*,$* > $@
+
+netperf.torus.%.bw.tcp.log: netperf.torus.%.bw.tcp.setup
+	$(SSH) $(Q) $(NETPERF) -H $(P) -t TCP_STREAM -T1,1 -- -S,125000 -m $* -M $* > $@
+
+netperf.torus.%.lat.udp.log: netperf.torus.%.lat.udp.setup
+	$(SSH) $(Q) $(NETPERF) -H $(P) -t UDP_RR -T1,1 -- -r $*,$* > $@
+
+netperf.torus.%.bw.udp.log: netperf.torus.%.bw.udp.setup
+	$(SSH) $(Q) $(NETPERF) -H $(P) -t UDP_STREAM -T3,3 -- -S,125000 -m $* -M $* > $@
+
+################################################################################
+
+%.setup: netperf.netserver.log %.before.io.dropped %.before.io.ifconfig \
+         %.before.cn.ifconfig %.before.sn.ifconfig %.tomal %.tune
+	true
+
+netperf.bridge.%.tune: netperf.ip
+	$(SSH) $(N) "$(BRIDGETUNE)" > $@
+
+netperf.torus.%.tune: netperf.ip netperf.torus.%.prep
+	$(SSH) $(N) "$(TORUSTUNE)" > $@
+
+netperf.torus.%.prep: netperf2.ip
+	$(SSH) $(Q) "$(TORUSTUNE)" > $@
+
+%.tomal: ionode.ip
+	$(SSH) $(I) "echo 100 > /proc/sys/dev/tomal/rx_raw_max_timer" > $@
+
+################################################################################
+
+%.io.dropped: ionode.ip
+	$(SSH) $(I) cat /proc/sys/dev/tomal/rx_raw_dropped_frames > $@
+
+%.io.ifconfig: ionode.ip
+	$(SSH) $(I) /sbin/ifconfig eth0 > $@
+
+%.cn.ifconfig: netperf.ip
+	$(SSH) $(N) /sbin/ifconfig eth0 > $@
+
+%.sn.ifconfig:
+	/sbin/ifconfig eth2 > $@
+
+################################################################################
+
+netperf.netserver.log: netperf.ip netperf.private.ip
+	$(SSH) $(N) 'killall netserver; netserver -p 4242' > $@
+
+netperf.private.ip: netperf.ifconfig.log
+	grep -o '192.168.[0-9]*.[0-9]*' $< | head -n 1 > $@
+
+netperf.ifconfig.log: netperf.ip
+	$(SSH) $(shell cat netperf.ip) ifconfig eth1 > $@
+
+netperf.ip: netperf.boot.log
+	grep -o '[^@]172.16.[0-9]*.[0-9]*' $< > $@
+
+netperf.boot.log: netperf.cpio.gz.uimg khctl
+	khctlserver=$(K) testramdisk 1 $< > $@
+
+netperf2.ip: netperf2.boot.log
+	grep -o '[^@]172.16.[0-9]*.[0-9]*' $< > $@
+
+netperf2.boot.log: netperf.cpio.gz.uimg khctl
+	khctlserver=$(K) testramdisk 1 $< > $@
+
+netperf.cpio.gz:
+	wget -q $(NETPERF.CPIO) -O $@
+
+################################################################################
+
+F = "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n"
+
+specinttest.csv: uImage.elf.md5 specinttest.cpio.gz.md5 specinttest.score
+	printf $(F) DATE KERNEL RAMDISK TEST 400.perlbench 401.bzip2 \
+		403.gcc 429.mcf 445.gobmk 456.hmmer 458.sjeng        \
+		462.libquantum 464.h264ref 471.omnetpp 473.astar     \
+		483.xalancbmk                                        \
+		$(shell date +%s)                                    \
+		$(shell cat uImage.elf.md5)                          \
+		$(shell cat specinttest.cpio.gz.md5)                 \
+		specinttest                                          \
+		$(shell cat specinttest.score) > $@
+
+specint.score: specinttest.score
+	cat $< | head -9 | tail -1 > $@
+
+specinttest.score: specinttest.log
+	grep '[4][0-9][0-9].*--' $< | awk '{print $$3}' > $@
+
+specinttest.log: specinttest.cpuinfo
+	$(SSH) $(shell cat specinttest.ip) /opt/spec/cpu2006/run.sh > $@
+
+specinttest.cpuinfo: specinttest.ip
+	while ! $(SSH) $(shell cat $<) cat /proc/cpuinfo; do sleep 1; done > $@
+
+specinttest.ip: specinttest.boot.log
+	grep -o '[^@]172.16.[0-9]*.[0-9]*' $< > $@
+
+specinttest.boot.log: specinttest.cpio.gz.uimg khctl
+	khctlserver=$(shell cat khctl.ip) testramdisk 1 $< > $@
+
+specinttest.cpio.gz:
+	wget -q $(SPECINT.CPIO) -O $@
+
+################################################################################
+
+specjbb.csv: uImage.elf.md5 specjbb.cpio.gz.md5 specjbb.score
+	printf "%s, %s, %s, %s, %s\n"            \
+		DATE KERNEL RAMDISK TEST SCORE   \
+	        $(shell date +%s)                \
+	        $(shell cat uImage.elf.md5)      \
+	        $(shell cat specjbb.cpio.gz.md5) \
+	        specjbb                          \
+	        $(shell cat specjbb.score) > $@
+
+specjbb.score: specjbb.log
+	grep 'Valid run, Score is' $< | grep -o '[0-9][0-9]*' > $@
+
+specjbb.log: specjbb.cpuinfo
+	$(SSH) $(shell cat specjbb.ip) /opt/SPECjbb2005/run.sh > $@
+
+specjbb.cpuinfo: specjbb.ip
+	while ! $(SSH) $(shell cat $<) cat /proc/cpuinfo; do sleep 1; done > $@
+
+specjbb.ip: specjbb.boot.log
+	grep -o '[^@]172.16.[0-9]*.[0-9]*' $< > $@
+
+specjbb.boot.log: specjbb.cpio.gz.uimg khctl
+	khctlserver=$(shell cat khctl.ip) testramdisk 1 $< > $@
+
+specjbb.cpio.gz:
+	wget -q $(SPECJBB.CPIO) -O $@
+
+################################################################################
+
+%.cpio.gz.uimg: %.cpio.gz
+	mkramdiskelf $<
+
+################################################################################
+
+%.cpio.gz.md5: %.cpio.gz
+	md5sum $< | fmt -w 1 | head -1 > $@
+
+uImage.elf.md5: uImage.elf.path
+	md5sum $(shell cat $<) | fmt -w 1 | head -1 > $@
+
+uImage.elf.path:
+	boot $(RELEASE) | grep uImage.elf | tail -1 > $@
+
+################################################################################
+
+khctl: khctl.ip
+	while ! $(SSH) $(shell cat $^) cat /proc/cpuinfo; do sleep 1; done > $@
+
+khctl.ip: khctl.boot.log
+	grep -o '172.16.[0-9]*.[0-9]*' $^ | head -n 1 > $@
+
+ionode.ip: khctl.boot.log
+	grep -o '172.16.[0-9]*.[0-9]*' $^ | tail -n 1 > $@
+
+khctl.boot.log:
+	when "entering forwarding state" $@ boot $(RELEASE) $(BLOCK)
+
+################################################################################
+
+Q = $(shell cat netperf2.ip)
+N = $(shell cat netperf.ip)
+P = $(shell cat netperf.private.ip)
+I = $(shell cat ionode.ip)
+K = $(shell cat khctl.ip)
+
+################################################################################
+
+clean:
+	$(RM) $(wildcard netperf.bridge.* netperf.torus.*)
+
+mrproper: clean
+	$(RM) $(wildcard known_hosts khctl* ionode* netperf* spec* uImage*)
+
+################################################################################
+
+.SECONDARY:

@@ -1,0 +1,37 @@
+#!/bin/bash
+#set -x
+
+#declare -r khgateway=spinoza
+declare -r blockipprefix="172.16.128"
+declare -r khctluser=root
+declare -r khctl=/root/scripts/khctl
+declare -r khctlcmd=acquireNodes
+declare -r khgatewayuser=${khgatewayuser:-$USER}
+declare -r ubootvarfile=/proc/device-tree/u-boot-env/khctlserver
+
+declare -r SSH=ssh
+if [[ -a  $ubootvarfile ]]
+then
+  khctlserver=$(cat $ubootvarfile) 
+fi
+
+if [[ -z $khctlserver ]]
+then
+  block=$1
+  if [[ -z $block ]]
+  then
+    echo "ERROR: must specify block"
+    echo "USAGE: $0 <blocknum>"
+    exit -1
+  fi
+  khctlserver=$blockipprefix.$block
+  shift
+fi
+
+
+if [[ -z $khgateway ]]
+then
+  $SSH -q $khctluser@$khctlserver "$khctl $khctlcmd $@"
+else
+  $SSH -q -t $khgatewayuser@$khgateway "$SSH -q $khctluser@$khctlserver \"$khctl $khctlcmd $@\""
+fi

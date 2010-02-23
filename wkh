@@ -1,0 +1,137 @@
+#!/bin/bash
+#set -x
+
+#dopull=1
+dopush=1
+iters=1
+#dereboot=1
+
+webserver=172.24.1.1
+webserverport=8080
+basepath=home/j/a/jappavoo/pub
+imagepath=/gsa/yktgsa/$basepath
+
+kernels=(default linux.ppc32.uimg)
+
+disks=(rails-ppc-2007-09-26.cpio.gz.uimg ror-2007-04-30.cpio.gz.uimg silico-ppc-2007-08-19.cpio.gz silico-ppc-2007-08-19.cpio.gz.uimg sshd-ppc-2007-09-28.cpio.gz.uimg ppt2.uimg)
+
+cmdline='console=bgcons lpj=8500000 ip=$ipaddr::$gatewayip:$netmask::eth0:off init=/init jawashere'
+
+mimereturn="
+\$bgp_blockid: \$bgp_location: \$ipaddr: booting..."
+
+blocknum=$1
+blockprefix=J
+blocksize=32
+blockionodes=1
+
+bn=$(printf "%02d" $blocknum)
+blockid=${blockprefix}${bn}_${blocksize}_${blockionodes}
+
+BGPCOMCMD="ssh spinoza /bgsys/bin/bgpconsole"
+
+function encode()
+{
+   echo $1 | perl -MURI::Escape -lne 'print uri_escape($_)'
+}
+
+function getdisk()
+{
+    range=${#disks[@]}
+    index=$RANDOM
+    ((index %= range))
+    disk=${disks[$index]}
+}
+
+function getkernel()
+{
+    range=${#kernels[@]}
+    index=$RANDOM
+    ((index %= range))
+    kern=${kernels[$index]}
+}
+
+function blockstatus()
+{
+ssh spinoza "/bgsys/bin/bgpconsole 2>/dev/null" <<EOF | grep JA04_32_1
+list_blocks
+quit
+EOF
+}
+
+function reboot()
+{
+  echo "REBOOTING: $1 $2"
+ssh spinoza "/bgsys/bin/bgpconsole 2>/dev/null" <<EOF
+select_block $1
+disconnect
+connect $1 outfile=/tmp/bgpconsole.out rasfile=/tmp/ras.out no_ras_disconnect
+redirect $1 on
+boot_block
+quit
+EOF
+  ping -c 1 $2
+  sleep 30
+}
+
+
+#geturl=http://$ip/boot?bootfile=http%3A%2F%2F172.24.1.1%3A8080%2Fhome%2Fj%2Fa%2Fjappavoo%2Fpub%2Fdefault\&diskfile=http%3A%2F%2F172.24.1.1%3A8080%2Fhome%2Fj%2Fa%2Fjappavoo%2Fpub%2F$2\&cmdline=console%3Dbgcons+lpj%3D8500000+ip%3D%24ipaddr%3A%3A%24gatewayip%3A%24netmask%3A%3Aeth0%3Aoff+init%3D%2Finit+jawashere\&returnmime=
+
+nodeipprefix="192.168.$blocknum"
+
+i=0
+
+
+while (( i < $iters ))
+do
+  if [[ -n $dopush ]] 
+  then 
+  echo
+  echo "PUSH TEST $i"
+  echo 
+
+  if [[ -n $doreboot ]]
+  then
+     reboot $blockid ${nodeipprefix}.1
+  fi
+
+  for node in $(seq 2 33)
+  do
+      nodeip="$nodeipprefix.$node"
+      nodebooturl="http://$nodeip/boot"
+      getdisk
+      getkernel
+ #     echo  curl -s -F "bootfile=@$imagepath/$kern" -F "diskfile=@$imagepath/$disk" -F "cmdline=$cmdline" -F "returnmime=" $nodebooturl
+      echo "PUSH: $nodeip: $kern $disk"
+      curl -s -F "bootfile=@$imagepath/$kern" -F "diskfile=@$imagepath/$disk" -F "cmdline=$cmdline" -F "returnmime=" $nodebooturl
+      echo 
+  done
+fi
+
+  if [[ -n $dopull ]]
+  then
+    echo 
+    echo "PULL TEST $i"
+    echo 
+
+    if [[ -n $doreboot ]]
+    then    
+      reboot $blockid ${nodeipprefix}.1
+    fi
+
+    for node in $(seq 2 33)
+    do
+      nodeip="$nodeipprefix.$node"
+      nodebooturl="http://$nodeip/boot"
+      getdisk
+      getkernel
+      webserverurl="http://$webserver:$webserverport/$basepath"
+      geturl="$nodebooturl?bootfile=$(encode "${webserverurl}/$kern")&diskfile=$(encode "${webserverurl}/$disk")&cmdline=$(encode "$cmdline")&returnmime="
+#      echo "$geturl"
+      echo "PULL: $nodeip: $kern $disk"
+      curl -s "$geturl"
+      echo
+    done
+  fi
+  i=$((i + 1))
+done

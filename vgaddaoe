@@ -1,0 +1,82 @@
+#!/bin/bash
+#set -x
+
+curdisks=$(pvdisplay | grep "PV Name" | while read pvdev
+do 
+  echo ${pvdev##*/}
+done)
+
+#turn into a single line to do string replace on space
+curdisks=$(echo $curdisks)
+
+newdisks=$(/root/bin/aoe6-58/aoetools-23/aoe-stat | while read new
+do
+  new=${new#*e};
+  new=${new%% *}; 
+  echo e${new}+; 
+done)
+
+newdisks=$(echo $newdisks)
+
+for cur in $curdisks
+do
+   newdisks=( ${newdisks[@]/${cur}+/} )
+done
+
+newdisks=${newdisks[@]/+/}
+
+if [[ -z $newdisks ]]
+then
+  echo "no new aoe disks found"
+  exit -1
+else
+  echo "found following new aoe disks: " $newdisks
+fi 
+
+devs=$(echo $newdisks)
+devs=${devs//e//dev/etherd/e}
+
+for d in $devs
+do
+  echo -n "pvcreate $d: "
+  if [[ -a $d ]]
+  then
+    if ! pvcreate $d
+    then
+      echo "ERROR: failed to create pv for $d" 
+    else
+      echo OK
+    fi
+  else
+    echo "ERROR: failed to find $d"
+  fi
+done  
+
+
+vg=$1
+
+if [[ -n $vg ]]
+then
+  if vgdisplay $vg > /dev/null 2>&1
+  then
+    if vgextend $vg $devs
+    then
+       echo "$devs added to $vg"
+    else
+      echo "ERROR: faild to extend $vg with $devs"
+      exit -1
+    fi
+  else
+    echo "$vg does not exist creating"
+    if vgcreate $vg $devs
+    then
+      echo "$vg created with $devs"
+      vgdisplay $vg
+    else
+      echo "ERROR: failed to create $vg with $devs"
+      exit -1
+    fi
+  fi
+fi 
+
+exit 0

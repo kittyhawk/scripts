@@ -1,0 +1,20 @@
+#!/bin/bash
+
+T=$(date -I)
+D=/gsa/yktgsa/projects/k/kittyhawk/pub/nightly/public/$T
+
+export PATH=$D/scripts:$PATH
+export PATH=$D/uboot/tools:$PATH
+
+set -e
+set -x
+
+mkdir $D
+cp $(dirname $0)/Makefile $D
+cd $D
+make REPO=/gsa/yktgsa/projects/k/kittyhawk/pub/git
+cat {linux-kh,uboot,scripts,appliances}/.done > changes
+make dist REPO=/gsa/yktgsa/projects/k/kittyhawk/pub/git
+rm -r -f appliances uboot linux-kh scripts/.git
+chmod 644 Makefile changes
+gzip -9 vmlinux

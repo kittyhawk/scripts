@@ -1,0 +1,97 @@
+#!/bin/bash
+#set -x 
+#####################################
+#
+#  IBM Coporation 
+#  Project kittyhawk
+#
+#  mkargimg
+#  Create qemu bootable debian disk 
+#  images.
+#  
+#####################################
+
+IPPREFIX=192.168
+MAXNUMNODES=33
+
+function icmpInEchos 
+{
+    tmp=$(cat /proc/net/snmp)
+    tmp=${tmp##*Icmp: }
+    echo $tmp | while read a1 a2 a3 a4 a5 a6 a7 a8 rest
+    do
+       echo $a8
+    done
+}
+
+function pingNodes
+{
+   local blk=$1
+   local -i count=0
+   local -i node
+
+   nodes=$(seq 1 $MAXNUMNODES)  
+   
+   for node in $nodes 
+   do
+     if ping -q -c 1 ${IPPREFIX}.$blk.$node > /dev/null 2>&1
+     then
+        ((count++))
+     fi
+   done
+   echo count=$count
+   return $count
+}
+
+function usage 
+{
+    echo "usage: $0 [-p] [-P] numNodes|blockNum"
+    echo "  -p print the current number of nodes that are available until all nodes are present"
+    echo "  -P check status of block by pings arg is interpreted as block num" 
+}
+
+
+
+origargs="$@" 
+typeset -i optcount=0 
+
+while getopts "pP" OPT
+do 
+  case $OPT in
+      ("p") PRN=1; (( optcount=optcount + 1));;
+      ("P") PING=1; (( optcount=optcount + 1));;
+  esac
+done
+
+shift $optcount
+
+if [[ $# != 1 ]]
+then
+    usage
+    exit -1
+fi
+
+
+if [[ -n $PING ]]
+then
+    block=$1
+    typeset -i num=$(pingNodes $block)
+    while (( $num < $MAXNUMNODES ))
+      do
+      num=$(pingNodes $block)
+     if [[ -n $PRN ]]; then echo $num; fi
+    done
+else 
+    numNodes=$1
+    base=$(icmpInEchos)
+    now=$(icmpInEchos)
+    delta=$((now - base))
+    
+    while (($delta < $numNodes))
+      do
+      now=$(icmpInEchos)
+      delta=$((now - base))
+      if [[ -n $PRN ]]; then echo $delta; fi
+    done 
+fi
+exit 0

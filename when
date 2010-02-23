@@ -1,0 +1,36 @@
+#!/usr/bin/expect -f
+
+if {[llength $argv] == 0} {
+    puts "'when' runs a command until a pattern is emitted"
+    puts ""
+    puts "usage: when PATTERN LOGFILE COMMAND \[ARGS\]"
+    puts ""
+    puts "example: when cafe log hexdump /dev/urandom"
+    exit 1
+}
+
+set pattern [ lindex $argv 0 ]
+set logfile [ lindex $argv 1 ]
+set command [ lindex $argv 2 ]
+set arg1 [ lindex $argv 3 ]
+set arg2 [ lindex $argv 4 ]
+set arg3 [ lindex $argv 5 ]
+
+set timeout 3600
+log_file -noappend $logfile
+
+if {[llength $argv] == 4} {
+    spawn $command $arg1
+} elseif {[llength $argv] == 5} {
+    spawn $command $arg1 $arg2
+} elseif {[llength $argv] == 6} {
+    spawn $command $arg1 $arg2 $arg3
+} else {
+    exit 2
+}
+
+expect -re "$pattern" {
+    exit 0
+}
+
+exit 1

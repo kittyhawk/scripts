@@ -1,0 +1,114 @@
+#!/bin/bash
+#set -x
+
+excludepat="ibm|cisco|force|myricom|broadcom|xensource|vmware|nortel|xerox"
+includepat="university"
+
+function printmacstruct 
+{
+    local mac=$1
+    local desc=$2
+
+    oc1=${mac%%-*}
+    oc2=${mac#*-}
+    oc3=${oc2#*-}
+    oc2=${oc2%%-*}
+
+    echo "     { 0x$oc1, 0x$oc2, 0x$oc3 }, /* $desc */"
+}
+
+num=$1
+
+if [[ -z $num ]]
+then
+   num=256
+fi
+
+ouiurl=http://standards.ieee.org/regauth/oui/oui.txt
+
+all="$(wget -q -O - $ouiurl | grep '(hex)')"
+#all="$(cat ouitest.txt | grep '(hex)')"
+include=$(echo "$all" | egrep -i "$includepat")
+rest=$(echo "$all" | egrep -i -v "$excludepat|$includepat")
+
+i=0
+while read m junk d
+do
+  usefirstaddr[$i]="$m"
+  usefirstdesc[$i]="$d"
+  ((i++))
+done <<EOF
+$include
+EOF
+usefirstcnt=$i
+
+i=0
+while read m junk d
+do
+  addrs[$i]="$m"
+  desc[$i]="$d"
+  ((i++))
+done <<EOF
+$rest
+EOF
+restcnt=$i
+
+echo "
+/* AUTO GENED BY scripts/$(basename $0) */
+#ifndef _KH_MACS_H_
+#define _KH_MACS_H_
+
+/*
+ * (C) Copyright 2007
+ * Project KittyHawk
+ * IBM Research
+ *
+ * See file CREDITS for list of people who contributed to this
+ * project.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of
+ * the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
+ * MA 02111-1307 USA
+ */
+
+#define KH_NUM_MACS $num
+
+struct macprefix {
+      unsigned char oc0;
+      unsigned char oc1;
+      unsigned char oc2;
+} khmacs[KH_NUM_MACS]={"
+i=0
+while (($i<$num))
+do
+  if (($i < $usefirstcnt))
+  then
+    printmacstruct "${usefirstaddr[$i]}" "${usefirstdesc[$i]}"
+    ((i++))
+  else
+     index=$RANDOM
+     (( index %= $restcnt ))
+     if [[ -n "${addrs[$index]}" ]]
+     then
+        printmacstruct "${addrs[$index]}" "${desc[$index]}"
+        addrs[$i]=""
+        desc[$i]=""
+        (( i++ ))
+     fi
+  fi
+done
+echo "
+};
+#endif
+"

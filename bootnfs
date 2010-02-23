@@ -1,0 +1,94 @@
+#!/bin/bash
+
+NAME=bootnfs
+VERSION=0.1
+
+nfsserver=172.16.2.1
+nfsroot=/exports/ro/aoe-vblade
+declare -i launchcon=0
+declare kernel
+announce=$NAME
+user=$USER
+
+function help()
+{
+    echo -e "\`$NAME' boots a set of nodes via NFS root\n\n"	\
+	    "Usage: $NAME [num]\n"				\
+	    " -s <nfsserver>    NFS server name\n"		\
+	    " -r <rootpath>     NFS root path\n"		\
+	    " -k <image>	Kernel image\n"			\
+	    " -a <announce msg> set console announce message\n"	\
+	    " -u <user>         user allocating nodes\n"	\
+	    " -c                launch console window\n"	\
+	    " -h                show this help statement\n"	\
+	    " -v                show version\n"
+}
+
+function setfdtdate
+{
+    local now=$(date -u)
+    local year=$(date -u -d "$now" +"%-Y")
+    local fdtdate="$(printf 'fdt mknode / rtc && fdt set /rtc second "[00 00 00 %02x]" && fdt set /rtc minute "[00 00 00 %02x]" && fdt set /rtc hour "[00 00 00 %02x]" && fdt set /rtc month "[00 00 00 %02x]" && fdt set /rtc mday "[00 00 00 %02x]" && fdt set /rtc year "[00 00 %02x %02x]"\n' `date -u -d "$now" +"%-S %-M %-H %-m %-d"` $(( $year / 256 )) $(( $year % 256 )))"
+    echo "$1" | khdo write "$fdtdate"
+    return 1;
+}
+
+function setip
+{
+    ipcmd="uni2ip eth1ip \"\$bgp_rank 192.168.0.2 192.168.31.255\" && setenv eth1 \"\$eth1ip 255.255.224.0\""
+    echo "$1" | khdo write "$ipcmd"
+    return 1;
+}
+
+function setannounce
+{
+    echo "$1" | khdo write "setenv kh_announce $announce"
+}
+
+optcount=0;
+while getopts "s:r:k:a:u:chv" OPT
+do
+  case $OPT in
+    ("s") nfsserver="$OPTARG"; (( optcount+=2 ));;
+    ("r") nfsroot="$OPTARG"; (( optcount+=2 ));;
+    ("k") kernel="$OPTARG"; (( optcount+=2 ));;
+    ("a") announce="$OPTARG"; (( optcount+=2 ));;
+    ("u") user="$OPTARG"; (( optcount+=2 ));;
+    ("c") launchcon=1; (( optcount+= 1 ));;
+    ("v") echo $VERSION; return 1;;
+    ("h") help; exit -1;;
+  esac
+done
+
+shift $optcount
+
+# on NFS we run with one external and one internal network
+setboot="setenv bootargs \"console=bgtty0,\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest init=/init ip=\$eth0ip:\$serverip:\$sitegate:\$sitemask::eth0:off nfsroot=$nfsserver:$nfsroot,nolock,proto=tcp\" && setenv ramfsarg -"
+
+if [[ -n $kernel && ! -a $kernel ]]
+then
+  echo "Kernel image $kernel incorrect"
+  exit -1
+fi
+
+a0="$(khget -x $user $1)"
+if (( $? != 0 ))
+then
+  echo "Node allocation failed ($a0)"
+  exit -1
+fi
+
+if (( launchcon != 0 )); then 
+  echo "$a0" | khdo concmd "khxcon %con% &"
+fi
+
+if [[ -n $kernel ]]
+then
+  echo "$a0" | khdo loadkernel $kernel
+fi
+
+setfdtdate "$a0"
+setip "$a0"
+setannounce "$a0"
+echo "$a0" | khdo write "$setboot && run boot"
+echo "$a0"

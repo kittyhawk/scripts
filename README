@@ -1,0 +1,51 @@
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+THE SOFTWARE IS CONSIDERED EXPERIMENTAL. NO SERVICE OR SUPPORT
+REQUEST CAN BE GENERATED AGAINST HARDWARE RUNNING THIS SOFTWARE.
+PROBLEMS EXPERIENCED WHILE RUNNING THIS SOFTWARE MUST BE REPRODUCED
+RUNNING VENDOR SUPPLIED PRODUCTION SOFTWARE PRIOR TO BEING REPORTED
+TO THE VENDOR IN ANY WAY.  ALL SUPPORT QUESTIONS AGAINST THE
+EXPERIMENTAL SOFTWARE SHOULD USE THE APPROPRIATE COMMUNITY MAILING
+LIST: http://cs-mailman.bu.edu/mailman/listinfo/kittyhawk
+
+ADDITIONAL INFORMATION AVAILABLE HERE:
+	http://kittyhawk.bu.edu
+
+bgpbootmon - monitor startup of nodes via ping
+bgpcons - start an xterm running the console for an I/O node
+bgpssh - ssh to all nodes in a block
+boot - wrapper to allocate and boot a block
+bootnfs - wrapper to start a kernel with a particular NFS root
+dobuild - script to create a kittyhawk software install from repository
+isquish.c - print ised tp format ranged values
+kh - connect console to a particular node
+khctl - simple interface for managing nodes and networks
+khdo - issue commands to a console (?)
+khgenmacs - generate MAC address
+khget - acquire a node
+khgetdisk - aquire an AOE disk
+khpipe - a simple tool to manipulate a set of nodes aquired from khctl
+khssh - ssh through a gateway to a node
+khxcon - start an xterm which starts khssh to a node
+mkramdiskelf - make an elf ramdisk
+nightly - nightly regression build and tests
+probe - automates grabbing a blue gene block
+regress - regression test
+stable - make a distributionb based off the latest stable build
+test - quick boot sanity test
+testramdisk - quick load of ramdisk and boot sanity test
+tunktgsa - create a tunnel to yktgsa
+vgaddaoe - add a volume group to AOE
+when - runs a command until a pattern is emitted
+wkh - web interface to kittyhawk
+khmon - crude visualization tool for demostrating kittyhawk
+khmonserver - server for visualization tool
+statloop - grab status from various mon hosts
+

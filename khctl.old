@@ -1,0 +1,627 @@
+#!/bin/bash
+set -x 
+
+#####################################
+#
+#  IBM Coporation 
+#  Project kittyhawk
+#
+#  mkQImg
+#  Create qemu bootable debian disk 
+#  images.
+#  
+#####################################
+
+
+# global constants and defaults all can be overridden
+# by setting a env variable of the same name with KHCTL
+# prevfixed. 
+# FIXME:  May want to change more of these into command line arguments
+# and use these as default: eg. kernel and additionals :-)
+
+declare -r KHBASEDIR=${KHCTL_BASEDIR:-/home/kh}
+declare -r KHCTLDIR=${KHCTL_CTLDIR:-$KHBASEDIR/Ctl}
+declare -r KHCTLLOCK=${KHCTL_CTLLOCK:-$KHCTLDIR/Lock}
+declare -r KHNAMESPACEDIR=${KHCTL_NAMESPACEDIR:-$KHBASEDIR/Nodes}
+declare -r KHFREEDIR=${KHCTL_FREEDIR:-$KHNAMESPACEDIR/Free}
+declare -r KHALLOCDIR=${KHCTL_ALLOCDIR:-$KHNAMESPACEDIR/Allocated}
+declare -r KHCONIDFILE=${KHCTL_CONIDFILE:-$KHCTLDIR/ConID}
+declare -r KHCONIDSTART=${KHCTL_CONIDSTART:-1}
+declare -r KHCONIDEND=${KHCTL_CONIDEND:-$(printf "%d" 0xffffffff)}
+declare -r KHPNETIDFILE=${KHCTL_PNETIDFILE:-$KHCTLDIR/PNetID}
+declare -r KHPNETIDSTART=${KHCTL_PNETIDSTART:-1}
+declare -r KHPNETIDEND=${KHCTL_PNETIDEND:-$(printf "%d" 0xffffffff)}
+declare -r KHTTYPROCDIR=${KHCTL_TTYPROCDIR:-/proc/sys/dev/bgtty}
+declare -r KHUSERPREFIX=${KHCTL_USERPREFIX:-con}
+declare -r KHTOTALSIZEFILE=${KHCTL_TOTALSIZEFILE:-/proc/device-tree/u-boot-env/bgp_totalnodes}
+declare -r KHRANKFILE=${KHCTL_RANKFILE:-/proc/device-tree/u-boot-env/bgp_rank}
+declare -r KHCTRLTTY=${KHCTLL_CTRLTTY:-/dev/bgtty0}
+declare -r KHCTRLID=${KHCTL_CTRLID:-0}
+declare -r KHTTYMAJOR=${KHCTL_TTYMAJOR:-230}
+
+# I know this is a little excessive but it is my habit ;-)
+declare -r MKNOD=${KHCTL_MKNOD:-mknod}
+declare -r ADDUSER=${KHCTL_MKNOD:-adduser}
+declare -r IFCONFIG=${KHCTL_IFCONFIG:-/sbin/ifconfig}
+declare -r LS=${KHCTL_LS:-/bin/ls}
+declare -r WC=${KHCTL_WC:-wc}
+declare -r GREP=${KHCTL_GREP:-grep}
+declare -r CAT=${KHCTL_CAT:-cat}
+declare -r MKDIR=${KHCTL_MKDIR:-mkdir}
+declare -r STTY=${KHCTL_STTY:-stty}
+declare -r RM=${KHCTL_RM:-rm}
+
+typeset dofunc
+
+usage()
+{
+  local func=$1
+  if [[ -z $func ]]
+  then
+     echo "USAGE:  $(basename $0) func args" >&2
+     $GREP '^function' $0
+  else
+     case "$func" in 
+         'acquireNodes')
+            echo "USAGE: $(basename $0) acquireNodes [-n netid] [-p] [-i] [-x] [-c credentials] user [num of nodes]" >&2
+            echo "     -n netid : add the nodes to the existing Private network identified" >&2
+            echo "                by netid" >&2
+            echo "     -p       : create a new private network for the nodes" >&2
+            echo "     -i       : add nodes to the internal public network" >&2
+            echo "     -x       : add nodes to the external network" >&2
+            echo "     -c cred  : associated credentials with user" >&2
+            echo "     user     : user to get the nodes for" >&2
+            echo "  num of nodes: number of nodes to get default is 1" >&2
+            ;;
+          *)
+            usage
+            ;;
+     esac
+  fi
+}
+
+processargs()
+{
+  if [[ $# == 0 ]]
+  then
+    usage
+    exit -1
+  fi
+
+  dofunc=$1
+}
+
+function myIPAddrs
+{
+   local net
+   local ip
+   local rest
+   local rc
+
+   # If no argument all configured ip address are returned
+   # otherwise only for the speccified interface
+   $IFCONFIG $1 2> /dev/null | $GREP 'inet addr' | while read net ip rest
+   do
+     ip=${ip##addr:}
+     if [[ $ip != 127.0.0.1 ]]
+     then
+        echo $ip
+     fi
+   done
+}
+
+function myInterfaces
+{
+   local iface
+   local rest
+
+   $IFCONFIG | $GREP Link | while read iface rest
+   do
+      echo $iface
+   done
+}
+
+
+function interfaceAddr
+{
+  local iface
+  local ip
+
+  if [[ -z $1 ]]
+  then
+    echo "USAGE: internfaceAddr <ip>" >&2
+    return -1
+  fi
+
+  for iface in $(myInterfaces) 
+  do
+      ip=$($IFCONFIG $iface | $GREP 'inet addr')
+      ip=${ip#*:}
+      ip=${ip%% *}
+      if [[ $ip = "$1"* ]]
+      then
+        echo $iface
+        return 0
+      fi
+  done
+
+  return -1
+}
+
+function getTotalNodes
+{
+  local rc
+
+  if [[ -a $KHTOTALSIZEFILE ]]
+  then 
+     rc=$($CAT $KHTOTALSIZEFILE)
+  fi
+  echo $rc
+}
+
+function getMyRank
+{
+  local rc
+
+  if [[ -a $KHRANKFILE ]]
+  then 
+     rc=$($CAT $KHRANKFILE)
+  fi
+  echo $rc   
+}
+
+configNodes()
+{
+  local khuser=$1
+  local pnetid=$2
+  local inet=$3
+  local xnet=$4
+  local conid=$5
+  local num=$6
+  local nodes="$7"
+  local n
+
+  if [[ ! -c $KHCTRLTTY ]]
+  then
+    if [[ -a $KHCTRLTTY ]]; then $RM -rf $KHCTRLTTY; fi
+    $MKNOD $KHCTRLTTY c $KHTTYMAJOR $KHCTRLID
+    $STTY raw -clocal cread -echo -echok -echoe < $KHCTRLTTY
+   fi 
+
+  #FIXME use isquish to speed this up
+  for n in $nodes
+  do
+    echo "itest \$bgp_rank == $n && setenv bgtty_sendid $conid" > $KHCTRLTTY
+    for (( i=0; i<10; i++ )); do i=$i; done
+    echo "itest \$bgp_rank == $n && setenv bgtty_rcvid $conid"  > $KHCTRLTTY
+    for (( i=0; i<10; i++ )); do i=$i; done
+  done 
+}
+
+function createTTY
+{ 
+  local khuser=$1
+  local conid=$2
+  local nodes="$3"
+
+  local dir=$KHALLOCDIR/$khuser/consoles/$conid
+  local tty=$dir/tty
+  local procfile=$KHTTYPROCDIR/$conid
+
+  if [[ -d $dir ]]
+  then
+      echo "ERROR: $dir already exists?!?" >&2
+      return -1
+  fi
+  
+  mkdir -p $dir
+
+  echo "$nodes" > $dir/nodes
+  
+  $MKNOD $tty c $KHTTYMAJOR $conid
+  $STTY raw -clocal cread -echo -echok -echoe < $tty
+  if (( $num == 1 ))
+  then
+    echo "FIXME: using broadcast just for one node :-(" >&2
+    echo "$conid $conid b" > $procfile
+  else
+    echo "$conid $conid b" > $procfile
+  fi
+
+  return 0
+}
+
+function createConUser
+{
+  local khuser=$1
+  local pnetid=$2
+  local conid=$3
+  local num=$4
+  local nodes="$5"
+
+  local dir=$KHALLOCDIR/$khuser/consoles/$conid
+  local conuser=$KHUSERPREFIX${conid}
+  local home=$dir/$conuser
+  local shell=$dir/conshell
+  local tty=$dir/tty
+
+  if [[ ! -d $dir ]]
+  then
+    echo "ERROR: createConUser: $dir does not exist?!?" >&2
+    return -1
+  fi
+  if ! $MKDIR $home
+  then
+    echo "ERROR: createConUser: could not make $home?!?" >&2
+    return -1
+  fi
+  if grep "^$conuser:" /etc/passwd
+  then
+    echo "ERROR: $conuser already in /etc/passwd" >&2
+    return -1
+  fi
+
+  cat >$shell <<EOF
+#!/bin/bash
+$STTY raw -clocal cread -echo -echok -echoe < $tty
+if tty > /dev/null
+then
+  echo "$conuser: Console"
+  $CAT $tty > /dev/tty & 
+fi
+$CAT > $tty
+EOF
+
+  echo "$conuser::65534:65534:nobody:$home:$shell" >> /etc/passwd
+  chown $conuser $tty
+  chmod u+x $shell
+  chown $conuser $shell
+}
+
+assignNodes()
+{
+  local khuser=$1
+  local pnetid=$2
+  local inet=$3
+  local xnet=$4
+  local conid=$5
+  local numNodes=$6
+  local nodes="$7"
+  local conuser=$KHUSERPREFIX${conid}
+  local conip
+  local i
+
+  if createTTY $khuser $conid "$nodes" 
+  then
+    if createConUser $khuser $pnetid $conid $num "$nodes" 
+    then
+       if configNodes $khuser $pnetid $inet $xnet $conid $num "$nodes"
+       then
+          if [[ -n $SSH_CONNECTION ]]
+          then
+              conip=${SSH_CONNECTION% *}
+              conip=${conip##* }
+              echo $conuser@$conip
+          else
+              for i in $(myInterfaces)
+              do
+                echo $conuser$(myIPAddrs $i)
+              done
+          fi
+          echo "Private Network ID : $pnetid"
+          echo "Private Network Interface: eth?"
+          if (( $inet == 1 ))
+          then
+            echo "Internal Public Network Inteface: eth?"
+          fi
+          if (( $xnet == 1 ))
+          then
+            echo "External Network Interface: eth?"
+          fi
+          echo "Nodes:"
+          echo "$nodes"
+          return 0
+       fi
+    fi
+  fi
+  return -1
+}
+
+function acquireCtl
+{
+    if [[ ! -d $KHCTLDIR ]]
+    then
+      if ! $MKDIR -p $KHCTLDIR
+      then
+         echo "ERROR: $KHCTLDIR does not exist and cannot be created" >&2
+         exit -1
+      fi
+    fi
+
+    # Acquire lock
+    lockfile -s1 $KHCTLLOCK
+}
+
+function releaseCtl
+{
+    # Release lock
+    rm -f $KHCTLLOCK
+}
+
+locked_initFreeDir()
+{
+    local maxnoderank
+    local nodes
+    local myrank
+
+    if [[ ! -d $KHFREEDIR ]]
+    then
+        $MKDIR -p $KHFREEDIR 
+        # nodes are zero indexed so we start from zero and go to number of nodes - 1 
+        maxnoderank=$(($(getTotalNodes) - 1))
+        nodes=$(seq 0 $maxnoderank)
+        if [[ -z $nodes ]]
+        then
+           echo "ERROR: initFreeDir failed to create free set of nodes : $nodes" >&2
+           return -1
+        fi
+        (cd $KHFREEDIR; $MKDIR $nodes)
+        myrank=$(getMyRank)
+        if (( $myrank <= $maxnoderank ))
+        then
+          # remove myself from free set of nodes
+          if [[ -d $KHFREEDIR/$myrank ]]
+          then
+             $RM -rf  $KHFREEDIR/$myrank
+          else
+             echo "ERROR: initFreeDir failed to remove myself $myrank from node set" >&2
+          fi
+        fi
+    fi    
+    return 0
+}
+
+locked_getFreeNodeList()
+{
+   if [[ ! -d $KHFREEDIR ]]
+   then 
+     if ! locked_initFreeDir
+     then 
+       return -1
+     fi
+   fi
+   echo "$($LS -1 $KHFREEDIR 2> /dev/null | /usr/bin/sort -n)"
+   return 0
+}
+
+locked_getNewConID()
+{
+  local rc
+
+  if [[ ! -e $KHCONIDFILE ]]
+  then
+     echo $KHCONIDSTART > $KHCONIDFILE
+  fi
+  rc=$($CAT $KHCONIDFILE)
+  if (( $rc == $KHCONIDEND )) 
+  then
+     echo "ERROR: locked_getNewConID: last id reached: NYI" >&2
+     return -1
+  fi
+  echo $(( $rc + 1 )) > $KHCONIDFILE
+  echo $rc
+  return 0
+}
+
+locked_getNewPNetID()
+{
+  local rc
+
+  if [[ ! -e $KHPNETIDFILE ]]
+  then
+     echo $KHPNETIDSTART > $KHPNETIDFILE
+  fi
+  rc=$($CAT $KHPNETIDFILE)
+  if (( $rc == $KHPNETIDEND )) 
+  then
+     echo "ERROR: locked_getNewPNetID: last id reached: NYI" >&2
+     return -1
+  fi
+  echo $(( $rc + 1 )) > $KHPNETIDFILE
+  echo $rc
+  return 0
+}
+
+locked_undoConID()
+{
+  local conid=$1
+  local rc
+  local cur
+
+  if [[ -e $KHCONIDFILE ]]
+  then
+    cur=$($CAT $KHCONIDFILE)
+  
+    # sanity check 
+    if (( ($conid + 1) == $cur ))
+    then
+      echo $conid > $KHCONIDFILE
+      return 0
+    fi
+  fi
+  return -1
+} 
+
+function validkhuser
+{
+   local khuser=$1
+   if [[ "$khuser" =~ "^[a-zA-Z]+[a-zA-Z0-9]*$" ]]
+   then
+     return 0
+   else
+     return -1
+   fi
+}
+
+function acquireNodes
+{
+  local rc
+  local num=$1
+  local freelist
+  local freecount
+  local nodes
+  local khuser
+  local conid
+  local createpnet
+  local pnetid
+  local inet
+  local xnet
+  local cred
+  local curpnetarray
+  local curnumpnets
+
+  local    origargs="$@"
+  local -i optcount=0
+
+  inet=0
+  xnet=0
+  createpnet=0
+
+  while getopts "n:pixc:h" OPT
+  do 
+    case $OPT in
+      ("n") pnetid="$OPTARG"; (( optcount=optcount + 2));;
+      ("p") createpnet=1; (( optcount=optcount + 1));;
+      ("i") inet=1; (( optcount=optcount + 1));;
+      ("x") xnet=1; (( optcount=optcount + 1));;
+      ("c") cred="$OPTARG"; (( optcount=optcount + 2));;
+      ("h") usage  acquireNodes; exit -1;;
+    esac
+  done
+ 
+  shift $optcount
+
+  khuser=$1 
+  if [[ -z $khuser ]]
+  then
+     echo "ERROR:  must specify user" >&2
+     usage acquireNodes
+     exit -1
+  fi
+      
+  if ! validkhuser $khuser
+  then
+    echo "ERROR: invalid user $khuser" >&2
+    usage acquireNodes
+    exit -1
+  fi
+
+  num=$2
+  if [[ -z $num ]]
+  then
+    num=1
+  fi 
+ 
+  acquireCtl
+
+  # taking the easy way out for the moment and using one big fing lock ;-) FIXME ;-)
+  # well don't actually since the idea is to throw this away and move to a fully distributed
+  # mechanism implemented on the control network
+       if [[ ! -d  $KHALLOCDIR ]]
+       then
+           $MKDIR -p $KHALLOCDIR
+       fi
+
+       if [[ -n $pnetid && ! -d $KHALLOCDIR/$khuser/pnets/$pnetid ]]
+       then
+           echo "ERROR: acquireNodes: netid $pnetid does not belong to you ($khuser/$pnetid)" >&2
+           releaseCtl
+           return -1
+       fi    
+       
+       if [[ ! -d $KHALLOCDIR/$khuser ]]
+       then
+           if [[ -n $cred ]]
+           then
+               echo "$cred" > $KHALLOCDIR/$khuser/cred
+           fi
+           # for each new user we create an private network for them that will be used
+           # we ignore the any netid that was specified
+           pnetid=$(locked_getNewPNetID)
+           if (( $? != 0 ))
+           then
+              echo "ERROR: acquireNodes: unable to create a new private network for you :-(" >&2
+              releaseCtl
+              return -1
+           fi
+           $MKDIR -p $KHALLOCDIR/$khuser/pnets/$pnetid
+       fi
+
+       # this code releys on the fact that pnets dir exits and will never be completely empty
+       # which the above ensures
+       curpnetarray=( $KHALLOCDIR/$khuser/pnets/* )
+       curpnetarray=( ${curpnetarray[*]##*/} )
+       curnumpnets=${#curpnetarray[*]}
+
+       if [[ -z $pnetid ]]
+       then
+          if (( $createpnet == 0 ))
+          then
+            if (( $curnumpnets == 1 ))
+            then
+               pnetid=${curpnetarray[0]}
+            else
+               echo "ERROR: acquireNodes: you have more that one private network. You must "\
+                    "       specify one of you existing networks with (${curpnetarray[*]}) with -n or "\
+                    "       use -p to specify that you want a new private network created." >&2
+               releaseCtl
+               return -1
+            fi
+          else 
+            pnetid=$(locked_getNewPNetID)
+            if (( $? != 0 ))
+            then
+              echo "ERROR: acquireNodes: unable to create a new private network for you :-(" >&2
+              releaseCtl
+              return -1
+            fi
+            $MKDIR -p $KHALLOCDIR/$khuser/pnets/$pnetid
+          fi
+       fi
+
+       conid=$(locked_getNewConID)
+       if (( $? != 0 )) 
+       then
+           echo "ERROR: acquireNodes: unable to create a new console channel for you :-(" >&2
+           releaseCtl
+           return -1
+       fi
+
+       freelist=$(locked_getFreeNodeList)
+       if (( $? != 0 )); then exit -1; fi
+       freecount=$(echo $freelist | $WC -w)
+       if (( $freecount >= $num ))
+       then
+         nodes="$(echo "$freelist" | head -$num)"
+         $MKDIR -p $KHALLOCDIR/$khuser/pnets/$pnetid/Nodes
+         (cd $KHFREEDIR;mv $nodes $KHALLOCDIR/$khuser/pnets/$pnetid/Nodes)
+       fi
+  releaseCtl
+
+  if [[ -z $nodes ]]
+  then
+    echo "no nodes available"
+    return -1;
+  fi
+
+  assignNodes $khuser $pnetid $inet $xnet $conid $num "$nodes"
+  return 0;
+}
+
+
+processargs "$@"
+shift
+
+$dofunc "$@"
+
+exit $?

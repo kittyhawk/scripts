@@ -1,0 +1,27 @@
+#!/bin/bash
+#set -x 
+KHQUITCON=0
+KHSSH=khssh
+
+if [[ $1 = -N ]]
+then
+   shift
+   output=$(khget $@)
+   if (( $? == 0 ))
+   then
+      read con <<EOF
+$output 
+EOF
+     echo "$output"
+     echo "connecting to $con"
+   else 
+     echo "$output"
+     exit -1
+   fi
+else
+   con="$1"
+   xtermargs="$2"
+fi
+
+    
+exec xterm  $xtermargs  -fg orange -bg black -e bash -c "echo starting console: $con connection;$KHSSH $con; echo Console connection terminated; if (( $KHQUITCON == 1)); then echo  Quitting in 20 seconds; sleep 20; exit -1; fi; echo Press \<ctl-c\> to close window; read"
