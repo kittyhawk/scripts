@@ -1,0 +1,35 @@
+#!/bin/bash
+#set -x
+
+s=10
+list="$1"
+
+if [[ -z $list ]]
+then
+  list="1 2 4 8 16 32 64 128 256 512"
+fi
+
+for i in $list
+do
+  echo "$i: allocating ...."
+  khalloc="$(khget -x user${i} $i)"
+  ncount=$(echo "$khalloc" | khdo peripcmd "echo %ip%" | wc -l)
+  if (( $ncount != $i ))
+  then
+     echo "ERROR: $i: did not get the number of nodes expected $ncount != $i"
+     echo $khalloc
+     break
+  fi
+  echo "$i: booting...."
+  echo "$khalloc" | khdo write 'setenv eth1 "$p0ip $p0mask" && run kboot'
+  echo "sleeping for $s"
+  sleep $s
+  echo "$i: pinging..."
+  pcount=$(echo "$khalloc" | khdo peripcmd "if ping -c 1 %ip% >/dev/null 2>&1;then echo good; else echo bad;fi" | grep good | wc -l)
+  if (( $pcount != $i ))
+  then
+    echo "ERROR: $i: was not able to ping all nodes $pcount != $i"
+    echo $khalloc
+    break
+  fi
+done

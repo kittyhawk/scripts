@@ -1,0 +1,69 @@
+if test -n "$LDCMD"; then
+    LDCMD=${LDCMD:-powerpc-bgp-linux-ld}
+else
+    LDCMD=${CROSS_COMPILE}ld
+fi
+
+MKIMGCMD=${MKIMGCMD:-mkimage}
+GZIPCMD=gzip
+RAMDISKADDR=0x11000000
+
+file=$1
+
+if [[ -z $file ]]
+then
+  echo "USAGE: $0 file"
+  exit -1
+fi
+ 
+type=$(file -b $file)
+
+if [[ $type = "directory" ]]
+then
+   echo "packing $file to $file.cpio"
+   cpio-pack -d $file -o $file.cpio
+   file=$file.cpio
+   type-$(file -b $file)
+fi
+
+if [[ $type = "ASCII cpio"* ]]
+then
+   echo "compressing $file to $file.gz"
+   cat $file | $GZIPCMD -9 > $file.gz
+   file=$file.gz
+   type=$(file -b $file)
+fi
+
+if [[ $type == "gzip compressed data"* ]]
+then
+   if [[ $(file -z -b $file) = "ASCII cpio"* ]]
+   then
+      echo "uimaging $file to $file.uimg"
+      $MKIMGCMD -T ramdisk -n $file -d $file $file.uimg
+      file=$file.uimg
+      type=$(file -b $file)
+   else
+      echo "ERROR: gzip archive does not seem to be a cpio"
+      exit -2
+   fi 
+fi
+
+if [[ $type = "PPCBoot image" || $type = "u-boot/PPCBoot image" ]]
+then
+   echo "elfing $file to $file.elf"
+   $LDCMD -m elf32ppc -e0 -Tdata $RAMDISKADDR -b binary -S -o $file.elf $file   
+   file=$file.elf
+   type=$(file -b $file)
+fi
+  
+
+if [[ $type = "ELF 32-bit MSB executable, PowerPC"* ]]
+then
+   echo "Setting permissions on $file to go+rx"
+   chmod go+rx $file
+   exit 0
+fi
+
+echo "$file : is of type $type: which is not supported"
+exit -3
+

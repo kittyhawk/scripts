@@ -1,0 +1,77 @@
+#!/bin/bash
+
+s=10
+list="$1"
+disk="$2"
+
+if [ $# -eq 0 -o -f "$1" ]; then
+    echo -e "\`$(basename $0)' boots ramdisks\n"                      \
+            "\n"                                                      \
+            "usage: $(basename $0) LIST DISK\n"                       \
+            "\n"                                                      \
+            "example: $(basename $0) 1 http://ibm.com/sshd.cpio.gz\n"
+    exit 1
+fi
+
+if [ -z "$khctlserver" ]; then
+    echo "error: khctlserver environment variable must be set"
+    exit 1
+else
+    export khctlserver
+fi
+
+if [[ -z $list ]]
+then
+  list="1 2 4 8 16 32 64 128 256 512"
+fi
+
+echo "$2" | grep -q 'http://' && {
+   cpio=$(echo $2 | sed 's,.*/,,')
+   rm -f $cpio &&
+   wget $2 ||
+   exit 1
+   disk=$cpio
+}
+
+file $disk | grep -q "gzip compressed data" && {
+   mkramdiskelf $disk || exit 1
+   disk=${disk}.uimg
+}
+
+file $disk | grep -q "cpio archive" && {
+   mkramdiskelf $disk || exit 1
+   disk=${disk}.gz.uimg
+}
+
+test -f $dist || {
+   echo "error: cannot find $disk"
+   exit 1
+}
+
+for i in $list
+do
+  echo "$i: allocating ...."
+  khalloc="$(khget -x user${i} $i)"
+echo $khalloc
+echo "$khalloc" | khdo concmd "khxcon %con% &"
+  ncount=$(echo "$khalloc" | khdo peripcmd "echo %ip%" | wc -l)
+  if (( $ncount != $i ))
+  then
+     echo "ERROR: $i: did not get the number of nodes expected $ncount != $i"
+     echo $khalloc
+     break
+  fi
+  echo "$khalloc" | khdo loadramdisk $disk
+  echo "$i: booting...."
+  echo "$khalloc" | khdo write 'setenv eth1 "$p0ip $p0mask" && imi $ramfsaddr && run kboot'
+  echo "sleeping for $s"
+  sleep $s
+  echo "$i: pinging..."
+  pcount=$(echo "$khalloc" | khdo peripcmd "if ping -c 1 %ip% >/dev/null 2>&1;then echo good; else echo bad;fi" | grep good | wc -l)
+  if (( $pcount != $i ))
+  then
+    echo "ERROR: $i: was not able to ping all nodes $pcount != $i"
+    break
+  fi
+
+done

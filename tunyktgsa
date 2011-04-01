@@ -1,0 +1,1 @@
+ssh -g -N -L 8080:yktgsa.ibm.com:80 spinoza

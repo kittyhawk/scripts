@@ -1,0 +1,33 @@
+#!/bin/bash
+#set -x 
+#####################################
+#
+#  IBM Coporation 
+#  Project kittyhawk
+#
+#  mkargimg
+#  Create qemu bootable debian disk 
+#  images.
+#  
+#####################################
+block=$1
+ipprefix=192.168.$block
+nodes=$(seq 1 33)
+cols=80
+rows=3
+conpgm=ssh
+conargs="-o UserKnownHostsFile=/tmp/$USER.hosts.bgpssh"
+conuserprefix="root@"
+
+if [[ -z $block ]]
+then
+   echo "USAGE: $0 Block"
+   exit -1
+fi
+
+for node in $nodes
+do
+   xterm -display $DISPLAY -geometry ${cols}x${rows} -e $conpgm $conargs ${conuserprefix}${ipprefix}.${node}  &
+done
+
+exit 0

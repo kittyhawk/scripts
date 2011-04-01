@@ -1,0 +1,71 @@
+#!/bin/bash
+#set -x 
+#####################################
+#
+#  IBM Coporation 
+#  Project kittyhawk
+#
+#  dobuild
+#  script to create a kittyhawk software
+#  install from our repositories
+#  
+#####################################
+
+declare -r KHROOT=${KHROOT:-$(pwd)/$(date +%Y-%m-%d:%T)}
+declare -r DEFAULTFUNCS=${DEFAULTFUNCS:-"doCreateTree doCheckouts doBuilds doInstalls"}
+
+declare -r srcdir=$KHROOT/src
+declare -r instdir=$KHROOT/install
+
+
+function doCreateTree
+{
+  for d in $srcdir $instdir
+  do
+     if [[ -d $d ]]
+     then
+        echo $d: exists skipping creation
+     else
+        mkdir -p $d
+     fi
+  done
+}
+
+function doCheckouts
+{
+  cd $srcdir
+  for r in $repos
+  do
+    git clone $r.git 
+  done
+}
+
+function doBuilds
+{
+}
+
+function doInstalls
+{  
+}
+
+dofuncs=$1
+
+if [[ $dofuncs = "-h" ]]
+then
+  usage
+  exit -1
+fi
+
+# if explicit functions are specified then only run those
+if [[ -z $dofuncs ]]
+then
+  dofuncs=$DEFAULTFUNCS
+fi
+
+for f in $dofuncs
+do
+  echo "running $f"
+  $f
+done 
+
+exit 0

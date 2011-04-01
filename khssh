@@ -1,0 +1,21 @@
+#!/bin/bash
+#set -x
+
+#declare -r khgateway=spinoza
+declare -r khgatewayuser=${khgatewayuser:-$USER}
+
+if tty > /dev/null
+then
+  ttyflag=-t
+else
+  ttyflag=-T
+fi
+#stty raw < /dev/tty 
+if [[ -z $khgateway ]]
+then
+  ssh $ttyflag -q "$@"
+else
+  ssh -q $ttyflag $khgatewayuser@$khgateway ssh $ttyflag -q "$@"
+fi
+#stty -raw < /dev/tty
+

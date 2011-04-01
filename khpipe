@@ -1,0 +1,317 @@
+#!/bin/bash
+set -x
+#####################################
+#
+#  IBM Coporation 
+#  Project kittyhawk
+#  
+# khpipe a simple tool to mainpulate
+# set of nodes acquired from khctl
+# 
+#  
+#####################################
+
+declare -i buffered=1
+
+declare -r KHPIPEFILEPREFIX=${KHPIPE_FILEPREFIX:-/tmp/$USER}
+
+declare buffer
+declare pipestagedatafile
+declare -a pipedatalines
+declare lines
+declare line
+
+declare -i i=0
+declare -i initialstage=0
+
+declare console
+declare -a nodes
+declare -a networks
+declare -a interfaces
+
+declare sshpid
+declare conpipe
+
+usage()
+{
+  local func=$1
+  if [[ -z $func ]]
+  then
+     echo "USAGE:  ${0##*/} func args" >&2
+     grep '^function' $0
+  else
+     case "$func" in 
+         'load')
+            ;;
+          *)
+            usage
+            ;;
+     esac
+  fi
+}
+
+
+processargs()
+{
+  if [[ $# == 0 ]]
+  then
+    usage
+    exit -1
+  fi
+
+  dofunc=$1
+}
+
+
+function sendfiles
+{
+    if [[ -z "$@" ]]
+    then
+      echo "USAGE: $FUNCNAME: <file to send>"
+      return -1
+    fi
+    cat $@ > $PIPEDATA
+    return 0
+}
+
+filesize()
+{
+   if [[ -z "$1" ]]
+   then
+     echo "USAGE: FUNCNAME: <file>"
+     return -1
+   fi
+
+   stat -c "%s" $1
+}
+
+function loadfile
+{
+   local addr="$1"
+   local file=$2
+   local -i size
+   
+   return 0
+}
+
+function loadkernel
+{
+   loadfile "\$loadaddr" $1
+   return 0
+}
+
+function loadramdisk
+{
+   loadfile "\$ramfsaddr" $1
+   return 0
+}
+
+function flushbuffer
+{
+   if (( buffered == 1 ))
+   then 
+       cat $buffer > $conpipe
+       return $?
+   fi
+   return 0
+}
+
+function createbuffer
+{
+  local file=${KHPIPEFILEPREFIX}/khpipebuf.$$.$RANDOM
+  if ! mkdir -p ${KHPIPEFILEPREFIX} 
+  then
+    echo "ERROR: could not create ${KHPIPEFILEPREFIX}" >&2
+    return -1
+  fi
+  if ! touch $file
+  then
+    echo "ERROR: could not create $buffer" >&2
+    return -1
+  fi
+  addpipeinfo "$file"
+  return 0
+}
+
+function resetbuffer
+{
+  cat /dev/null > $buffer
+  return 0
+}
+
+function cmd
+{
+   # take care of stdout dispositiion
+   eval $1 \"$console\"  \"${nodes[@]}\" \"${networks[@]}\" $outdirective
+   return 0
+}
+
+function concmd 
+{
+  return 0
+} 
+
+function nodescmd 
+{ 
+  return 0
+} 
+
+function netscmd 
+{ 
+  return 0
+} 
+
+function interfacescmd 
+{ 
+  return 0
+} 
+
+function pernodecmd 
+{ 
+  return 0
+} 
+
+function pernetcmd 
+{ 
+  return 0
+} 
+
+function perinterfacecmd 
+{ 
+  return 0
+} 
+
+function null
+{
+  return 0
+}
+
+addpipeinfo()
+{
+  if [[ -z $KHPIPEINFO ]]
+  then
+    KHPIPEINFO="$1:"
+  else 
+    KHPIPEINFO="$KHPIPEINFO $1:"
+  fi
+}
+
+function parsepipeinfo
+{
+  local info="$1"
+  
+  info=${info%KHPIPEINFO: }  
+
+  conpipe=${info##:.*}
+  sshpid=${conpipe%%* }
+  conpipe=${conpipe## *}
+
+  info=${info%*: }
+  buffer=${info##:.*}
+
+  if [[ $buffer = "NOBUFFER" ]]
+  then
+     buffer=""
+     buffered=0
+  else
+     buffered=1
+  fi
+}
+
+function createconpipe
+{
+   local file=${KHPIPEFILEPREFIX}/khconpipe.$$.$RANDOM
+
+   if [[ -c $file ]]
+   then
+     rm -rf $file
+   fi
+   mknod $file p
+
+   cat $file | ssh $console >& /dev/null &
+   sshpid=$(jobs -p %%)
+   disown %%
+   conpipe="$file"
+
+   return 0
+}
+
+processargs "$@" 
+shift 
+
+(( i = -1 ))
+while read line
+do 
+  (( i++ ))
+  if (( $i == 0 )) && [[ ! $line =~ "^KHPIPEINFO: .*" ]]
+  then
+    (( initialstage++ ))
+    continue
+  fi
+
+  if (( $i == 0 )) && [[ $line =~ "^KHPIPEINFO: .*" ]]
+  then
+     KHPIPEINFO="$line"
+     continue
+  fi
+
+  pipedatalines[$i]="$line"
+  lines="$lines$line
+"
+
+  if [[ "$line" =~ "^con.*" ]]
+  then
+    console="$line"
+    continue
+  fi
+   
+  if [[ "$line" =~ "^network.*" ]]
+  then
+    interface=${line##*: }
+    interfaces=( ${interfaces[@]} $interface )
+    netid=${line%% :*}
+    netid=${netid#* }
+    if [[ "$netid" = "External" ]]; then netid=1; fi
+    if [[ "$netid" = "Internal" ]]; then netid=2; fi 
+    netids=( ${netids[@]} $netid )
+    continue
+  fi 
+    if [[ "$line" =~ "^nodes:.*" ]]
+    then
+      nodes=( ${nodes[@]} ${line#nodes: } )
+      break;
+  fi
+
+done
+
+if (( $initialstage == 1 )) 
+then 
+  addpipeinfo "KHPIPEINFO"
+
+  createconpipe
+  addpipeinfo "$conpipe $sshpid"
+
+  if (( $buffered == 1 )); 
+  then 
+      createbuffer
+  else
+      addpipeinfo "NOBUFFER"
+  fi
+else 
+#  set -x
+   true
+fi
+
+parsepipeinfo "$KHPIPEINFO"
+
+$dofunc $@ 
+
+if (( $# == 0 ))
+then
+  addpipeinfo "$dofunc"
+else
+  addpipeinfo "$dofunc $@"
+fi
+
+echo $KHPIPEINFO
+echo "$lines"

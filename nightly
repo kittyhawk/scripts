@@ -1,0 +1,26 @@
+#!/bin/bash
+
+T=$(date -I)
+D=/gsa/yktgsa/projects/k/kittyhawk/pub/nightly/private/$T
+A=/gsa/yktgsa/projects/k/kittyhawk/pub/nightly/display
+
+export PATH=$D/scripts:$PATH
+export PATH=$D/uboot/tools:$PATH
+
+set -e
+set -x
+
+mkdir $D
+cp $(dirname $0)/Makefile $D
+cd $D
+chmod 644 Makefile
+make REPO=/gsa/yktgsa/projects/k/kittyhawk/git
+make dist REPO=/gsa/yktgsa/projects/k/kittyhawk/pub/git
+rm -r -f appliances uboot linux-kh scripts/.git
+rm vmlinux
+regress all RELEASE=cwd
+regress mrproper
+grep -h -v DATE score.csv >> $A/score.csv
+cd $A
+gnuplot < score.plot
+chmod 644 score.csv score.gif

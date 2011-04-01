@@ -1,0 +1,28 @@
+#!/bin/bash
+#set -x
+
+PORTPREFIX=50
+
+cmd=$1
+
+if [[ $cmd = "-p" ]]
+then
+  parallel=&
+  shift
+  cmd=$1
+fi
+
+shift
+
+for target in $@
+do
+   block=${target%%-J*}
+   block=${block##*-N}
+   block=${block#0}
+   node=${target%%:*}
+   node=${node##*-J}
+   node=${node#0}
+   ip=${target##*:}
+   port=$PORTPREFIX$block$node
+   echo "$cmd" | netcat -w 1 -n -u $ip $port $parallel
+done
