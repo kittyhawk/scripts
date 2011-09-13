@@ -1,0 +1,40 @@
+#!/bin/bash
+#set -x
+
+if test -n "$OBJDUMPCMD"; then
+   OBJDUMPCMD=${OBJDUMPCMD:-powerpc-bgp-linux-objdump}
+else
+   OBJDUMPCMD=${CROSS_COMPILE}objdump
+fi
+
+if test -n "$OBJCPYCMD"; then
+   OBJCPYCMD=${OBJCPYCMD:-powerpc-bgp-linux-objcopy}
+else
+   OBJCPYCMD=${CROSS_COMPILE}objcopy
+fi
+
+if (( $# < 2 )); then
+ echo "$0: <outfile> <primary elf> <single section elfs to add>"
+ exit -1
+fi
+
+out=$1
+shift
+primary=$1
+shift
+add="$@"
+typeset -i j=0
+pid=$$
+secargs=$(for i in $add
+do
+  ${OBJDUMPCMD} -h $i | grep '^ *[0-9]' | while read idx name size addr rest
+  do
+       section=$(basename $i)
+       section=${section%%.elf}.bin
+       ${OBJCPYCMD} -O binary $i $pid.$section
+       echo "--add-section $section=$pid.$section --change-section-address $section=0x$addr --set-section-flags $section=contents,alloc,load,data"
+  done
+  ((j++))  
+done)
+
+${OBJCPYCMD} $secargs $primary $out
