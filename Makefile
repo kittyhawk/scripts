@@ -63,10 +63,12 @@ linux:
 	git clone $(REPO)/linux.git
 
 clean:
+	rm -f *.elf *.bin
 	$(MAKE) -C uboot mrproper
 	$(MAKE) -C linux mrproper
 
 mrproper:
+	rm -f *.elf *.bin
 	rm -r -f scripts appliances uboot linux
 
 dist:
