@@ -1,3 +1,5 @@
+#!/bin/bash
+
 if test -n "$LDCMD"; then
     LDCMD=${LDCMD:-powerpc-bgp-linux-ld}
 else
@@ -23,7 +25,7 @@ then
    echo "packing $file to $file.cpio"
    cpio-pack -d $file -o $file.cpio
    file=$file.cpio
-   type-$(file -b $file)
+   type=$(file -b $file)
 fi
 
 if [[ $type = "ASCII cpio"* ]]
@@ -48,7 +50,7 @@ then
    fi 
 fi
 
-if [[ $type = "PPCBoot image" || $type = "u-boot/PPCBoot image" ]]
+if [[ $type = "PPCBoot image" || $type = "u-boot/PPCBoot image" || $type = "u-boot legacy uImage"* ]]
 then
    echo "elfing $file to $file.elf"
    $LDCMD -m elf32ppc -e0 -Tdata $RAMDISKADDR -b binary -S -o $file.elf $file   
