@@ -1,7 +1,7 @@
 # To cross-compile use: make ARCH=powerpc CROSS_COMPILE=powerpc-linux-
 # You should have these in your PATH: $PWD/uboot/tools $PWD/scripts
 
-REPO = http://github.com/kittyhawk
+REPO = git://github.com/kittyhawk
 
 DIST = $(PWD)/uboot/u-boot $(PWD)/linux/arch/powerpc/boot/uImage.elf $(PWD)/linux/vmlinux $(PWD)/appliances/sshd/sshd.cpio.gz.uimg $(PWD)/appliances/sshd/sshd.cpio.gz.uimg.elf appliances/khctl/khctl.cpio.gz.uimg.elf uboot/board/bluegene/scripts/khctl.hush.uimg.elf
 
