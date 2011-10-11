@@ -1,0 +1,157 @@
+#!/bin/bash
+set -x 
+
+function usage
+{
+   echo "$0 [-d dir] ['print ip' | 'print id' | 'verbose' | 'deverbose' | 'restart']"
+   echo "   -d memcinfo directory"
+   echo "   -n mcnetid directory"
+   echo "default command is 'print ip'"
+}
+
+
+function verbose
+{
+  MCLIST=${MCSERVERS},
+  if [[ $1 = 1 ]] 
+  then
+    MCCONF=memcached.conf.verbose
+  else
+    MCCONF=memcached.conf.normal
+  fi
+
+  while $(echo $MCLIST | grep ',' &> /dev/null)  
+  do
+    MCS=${MCLIST%%\,*}
+    $(ssh -q -i $MEMCINFODIR/ids/id_dsa root@$MCS cp $MCCONF memcached.conf 2>&1 > /dev/null) && echo -n . &
+
+    MCLIST=${MCLIST#*\,}
+  done
+  wait
+  echo done
+}
+
+function restart
+{
+  MCLIST=${MCSERVERS},
+  while $(echo $MCLIST | grep ',' &> /dev/null)  
+  do
+    MCS=${MCLIST%%\,*}
+    $(ssh -q -i $MEMCINFODIR/ids/id_dsa root@$MCS /root/memcached restart 2>&1 > /dev/null) && echo -n . &
+    MCLIST=${MCLIST#*\,}
+  done
+  wait
+  echo done
+}
+
+
+origargs="$@"
+optcount=0
+
+while getopts "d:n:h" OPT
+do 
+  case $OPT in
+    ("d") MEMCINFODIR="$OPTARG"; (( optcount=optcount + 2));;
+    ("n") MCNETID="$OPTARG"; (( optcount=optcount + 2));;
+    ("h") usage; exit -1;;
+  esac
+done
+
+shift $optcount
+
+if [[ -z $KHROOT ]]
+then
+  KHROOT=$HOME/khroot
+fi 
+
+APPDIR=$KHROOT/appliances/memcapp
+
+if [[ -z $MEMCINFODIR ]]
+then
+    if [[ -z $khctlserver ]]
+    then 
+        if [[ -a /proc/device-tree/u-boot-env/khctleth0ipaddr ]]
+        then
+            khctlserver=$(cat /proc/device-tree/u-boot-env/khctleth0ipaddr)
+            MEMCINFODIR=$APPDIR/memcinfo${khctlserver##*.}
+        else
+            echo "ERROR: khctlserver is not set" >&2
+            exit -1
+        fi
+    fi
+fi
+
+
+if [[ ! -d $MEMCINFODIR ]]
+then
+   if [[ ! -h $MEMCINFODIR || ! -d $(readlink $MEMCINFODIR) ]]
+   then
+       if [[ ! -e $MEMCINFODIR ]]
+       then
+	   mkdir $MEMCINFODIR
+       else
+	   echo "ERROR: $MEMCINFODIR is not a directory" >&2
+	   exit -1
+       fi
+   fi
+fi
+
+COMMAND=$1
+if [[ -z $COMMAND ]]
+then
+   COMMAND="print ip"
+fi 
+
+if [[ -z $MCNETID && -f /proc/device-tree/u-boot-env/bg_eth2_netid ]] 
+then
+  MCNETID=$(cat /proc/device-tree/u-boot-env/bg_eth2_netid)
+fi
+
+infofiles=$(find $MEMCINFODIR/ -name memc-\*.info -type f)
+
+for f in $infofiles
+do
+  netidvalid=1
+  while read line 
+  do 
+    if [[ $netidvalid = 0 ]]
+    then 
+      continue
+    fi
+    if [[ "$line" =~ "^network.*: .*" ]]
+    then
+      netid=${line%% :*}
+      netid=${netid#* }
+      if [[ -z $MCNETID ]]
+      then 
+	  MCNETID=$netid
+      else
+        if [[ $MCNETID != $netid ]]
+        then
+          netidvalid=0
+          continue
+        else 
+          netidvalid=1
+        fi
+      fi
+    fi      
+    if [[ "$line" =~ "^nodeinfo: .*" ]]
+    then
+     ip=${line##*: }
+     ip=${ip##* }
+     ip=${ip%% *}
+     MCSERVERS=${MCSERVERS},$ip
+  fi
+  done < $f
+done
+
+export MCSERVERS=${MCSERVERS#,}
+
+case $COMMAND in
+ ("print ip") echo $MCSERVERS;; 
+ ("print id") echo $MCNETID;;  
+ ("verbose") verbose 1;;  
+ ("deverbose") verbose 0;;  
+ ("restart") restart; ;;
+ ("") echo $MCSERVERS;;
+esac

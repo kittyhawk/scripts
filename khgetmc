@@ -1,0 +1,201 @@
+#!/bin/bash
+set -x
+
+# FIXME:
+# there is big sequential loops here probably
+# does not matter right now as aoe id's
+# only range from {0..9} * {0..15}  
+
+export BIGPHYS=1200
+
+function interactive
+{
+  message="$1 ... Press <enter> ..."
+  echo $message
+  read
+}
+
+function usage
+{
+   echo "$0 [-c <num>] [-r khroot] [-u user] [-n netid]"
+   echo "   -w no windows"
+   echo "   -c number"
+   echo "   -r khroot directory"
+   echo "   -u khuser"
+   echo "   -n netid"
+   echo "   -d do not delete old mcinfo files"
+
+}
+
+VERBOSITY=0
+FETCHMEMCINFO=1  
+
+MCMINCS=1024
+MCMAXCS=131072
+MCFACTOR=16
+
+origargs="$@"
+optcount=0
+
+while getopts "wn:u:r:c:ds:S:f:h" OPT
+do 
+  case $OPT in
+    ("w") NOWINDOWS=1; (( optcount=optcount + 1));;
+    ("n") MCNETID="$OPTARG"; (( optcount=optcount + 2));;
+    ("u") KHUSER="$OPTARG"; (( optcount=optcount + 2));;
+    ("r") KHROOT="$OPTARG"; (( optcount=optcount + 2));;
+    ("c") NUM="$OPTARG"; (( optcount=optcount + 2));; 
+    ("d") NODELOLDMCINFO=1; (( optcount=optcount + 1));;
+    ("s") MCMINCS="$OPTARG"; (( optcount=optcount + 1));;
+    ("S") MCMAXCS="$OPTARG"; (( optcount=optcount + 1));;
+    ("f") MCFACTOR="$OPTARG"; (( optcount=optcount + 1));;
+    ("h") usage; exit -1;;
+  esac
+done
+
+
+let MCMINCS+=200
+let MCMAXCS+=200
+
+if [[ -z $KHROOT ]]
+then
+  KHROOT=$HOME/khroot
+fi 
+APPDIR=$KHROOT/appliances/memcapp
+
+export PATH=$PATH:$KHROOT/scripts
+
+if [[ -z $KHUSER ]] 
+then 
+  if [[ -a /proc/device-tree/u-boot-env/khctluser ]]
+  then
+     KHUSER=$(cat /proc/device-tree/u-boot-env/khctluser)
+  else
+     KHUSER=$USER
+  fi
+fi
+
+if [[ -z $khctlserver ]]
+then 
+  if [[ -a /proc/device-tree/u-boot-env/khctleth0ipaddr ]]
+  then
+      khctlserver=$(cat /proc/device-tree/u-boot-env/khctleth0ipaddr)
+      MEMCINFODIR=$APPDIR/memcinfo${khctlserver##*.}
+  else
+      echo "ERROR: khctlserver is not set" >&2
+      exit -1
+  fi
+fi
+
+MEMCINFODIR=$APPDIR/memcinfo${khctlserver##*.}
+
+if [[ ! -d $MEMCINFODIR ]]
+then
+   if [[ ! -h $MEMCINFODIR || ! -d $(readlink $MEMCINFODIR) ]]
+   then
+       if [[ ! -e $MEMCINFODIR ]]
+       then
+	   mkdir $MEMCINFODIR
+       else
+	   echo "ERROR: $MEMCINFODIR is not a directory" >&2
+	   exit -1
+       fi
+   fi
+fi
+
+if [[ -z $NUM ]]
+then
+   NUM=1
+fi
+
+MCKERN=$APPDIR/memcapp-uImage
+MCAPP=$APPDIR/memcapp.gz.uimg
+
+if [[ ! -a $MCKERN ]] 
+then
+  echo "ERROR: $MCKERN does not exist"
+  exit 0
+fi
+
+if [[ ! -a $MCAPP ]] 
+then
+  echo "ERROR: $MCAPP does not exist"
+ exit 0
+fi
+
+if [[ -z $MCAPP || -z $KHUSER  ]]
+then
+  echo "ERROR: Could not determine values" >&2
+  exit -1
+fi
+
+if [[ -z $NODELOLDMCINFO ]] 
+then
+  uptime=$(ssh root@$khctlserver cat /proc/uptime)
+  let uptime=$(echo $uptime | cut '-d.' -f1 )/60
+  find -L $MEMCINFODIR -name memc-\*.info -type f  -mmin +$uptime -exec rm {} \;
+fi
+
+whenout=/tmp/$KHUSER.$$.wout
+
+if [[ -z $MCNETID ]]
+then
+  if [[ -a /proc/device-tree/u-boot-env/mc_iface && -a /proc/device-tree/u-boot-env/bg_${mceth}_netid ]]
+  then
+     mceth=$(cat /proc/device-tree/u-boot-env/mc_iface)
+     mcnetid=$(cat /proc/device-tree/u-boot-env/bg_${mceth}_netid)
+     mcs=$(khget -n $MCNETID $KHUSER $NUM)
+  else
+   mcs=$(khget -p 1 $KHUSER $NUM)
+  fi
+else
+  mcs=$(khget -n $MCNETID $KHUSER $NUM)
+fi
+
+# FIXME: HERE IS THE LOOP SEE TOP COMMENT
+# all the ids first to ensure that 
+# we have enough ids
+if (( $? != 0 ))
+then
+  echo "ERROR: failed to acquire $NUM nodes for memcached servers" >&2
+  exit -1
+fi
+
+mcscon=$(echo "$mcs" | khdo concmd "echo %con%")
+echo "MCS INFO: $mcs" >&2
+
+if [[ -n $MCKERN ]]
+then
+  echo "$mcs" | khdo loadkernel $MCKERN
+fi
+echo "$mcs" | khdo loadramdisk $MCAPP
+
+nodes=$(echo "$mcs" | khdo pernodecmd "echo %node%")
+i=0
+for n in $nodes
+do
+  configline="itest \$bgp_rank == $n && setenv mc_eth eth0"
+  echo "$mcs" | khdo write "$configline"
+  (( i++ ))
+done
+
+nodes=$(echo $nodes)
+nodes=${nodes// /-}
+echo "$mcs" > $MEMCINFODIR/memc-$nodes.info
+
+echo "$mcs" | khdo write "setenv mc_server 1"
+echo "$mcs" | khdo write "setenv mc_chunksize $MCMINCS"
+echo "$mcs" | khdo write "setenv mc_maxchunksize $MCMAXCS"
+echo "$mcs" | khdo write "setenv mc_factor $MCFACTOR"
+
+let BIGPHYS*=256 
+echo "$mcs" | khdo write "setenv bootargs root=/dev/ram0 rw bigphysarea=$BIGPHYS console=bgtty0,\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest init=/init ip=\$eth0ip:\$serverip:\$sitegate:\$sitemask::eth0:off"
+echo "$mcs" | khdo write 'setenv ramfsarg $ramfsaddr'
+echo "$mcs" | khdo write "run boot"
+
+if [[ -z $NOWINDOWS ]]
+then
+  echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x6+0+700\" "mc${khctlserver##*.}" &"
+fi
+
+echo "$mcs"

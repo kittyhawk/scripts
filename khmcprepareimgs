@@ -1,0 +1,35 @@
+#!/bin/bash
+set -x
+KHROOT=$HOME/khroot
+MEMCAPPS="memcapp"
+DEST=surveyor:khroot/appliances/
+
+for app in $MEMCAPPS 
+do
+  #(cd $KHROOT/appliances/$app 
+  #    test ! -d fs && mkdir -p fs && cd fs && sudo cpio -id < ../$app.cpio)
+  (cd $KHROOT/appliances/$app
+      test ! -d fs && mkdir -p fs 
+      sudo mount -o loop $app.ext3 fs)
+  (cd $KHROOT/appliances/$app/fs/root 
+      sudo rm -rf  khroot/programs/* khroot/scripts 
+      sudo mkdir -p khroot/programs khroot/scripts 
+      sudo cp -a $KHROOT/programs/* khroot/programs
+      sudo cp -a $KHROOT/scripts/* khroot/scripts
+      sudo cp $KHROOT/scripts/mcapp//authorized_keys .ssh/ 
+      sudo cp $KHROOT/scripts/mcapp//memcachedemo.id_dsa.pub .ssh/id_dsa.pub
+      sudo cp $KHROOT/scripts/mcapp//memcachedemo.id_dsa .ssh/id_dsa)
+  (cd $KHROOT/appliances/$app
+      sudo umount fs
+      gzip -9 -c $app.ext3 > $app.gz
+      mkimage -A ppc -O linux -T ramdisk -C gzip -d $app.gz $app.gz.uimg)
+      
+  #(cd $KHROOT/appliances/$app/fs ; 
+  #    sudo find . -depth -print | sudo cpio -o | gzip -9 > ../$app.gz)
+  #   mkimage -A ppc -O linux -T ramdisk -d $app.gz $app.gz.uimg)
+  
+  (cd $KHROOT/scripts/mcapp//
+      cp memcachedemo.id_dsa $KHROOT/appliances/$app/id_dsa
+      cp memcachedemo.id_dsa.pub $KHROOT/appliances/$app/id_dsa.pub)
+  (cd $KHROOT/appliances/$app; rsync $app.gz.uimg id_dsa id_dsa.pub $DEST/$app/)
+done

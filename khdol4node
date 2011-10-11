@@ -1,0 +1,12 @@
+#!/bin/bash
+
+num=$1
+if [[ -z $num ]]
+then
+   num=1
+fi
+
+node="$(khget l4hacker $num)"
+echo "$node" > node
+echo "$node" | khdo concmd "khxcon %con% &"
+

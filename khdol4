@@ -1,0 +1,51 @@
+#!/bin/bash
+# simple script to load and node with L4 images and boot it
+
+KHDOCMD="khdo"
+
+nfile=$1
+
+if [[ -z $nfile || ! -a $nfile ]]
+then
+  echo "USAGE: $0 <alloc file>"
+  exit -1
+fi
+
+nodes="$(cat $nfile)"
+
+# kickstart is loaded and booted as if it were our standard
+# kernel eg. at loadaddr
+export kickstart=kickstart.uimage
+
+# L4 kernel elf loaded where kickstart can find it
+export l4kernel=powerpc-kernel
+export l4kaddr=1400000
+
+# L4 sigma0 task loaded where kickstart can find it
+export l4s0=sigma0
+export l4s0addr=1500000
+
+# L4 root task loaded where kickstart can find it
+export l4root=pingpong
+export l4rootaddr=1600000
+
+# load files into nodes
+echo "loading $kickstart as kernel ..."
+echo "$nodes" | ${KHDOCMD} loadkernel $kickstart
+echo "loading $l4kernel@$l4kaddr ..."
+echo "$nodes" | ${KHDOCMD} loadfile $l4kaddr $l4kernel
+echo "loading $l4s0@$l4s0addr ..."
+echo "$nodes" | ${KHDOCMD} loadfile $l4s0addr $l4s0
+echo "loading $l4root@$l4rootaddr ..."
+echo "$nodes" | ${KHDOCMD} loadfile $l4rootaddr $l4root
+
+# update fdt
+echo "setup fdt to reflect loaded modules and console settings"
+echo "$nodes" | ${KHDOCMD} writecon "fdt mknode / l4 && \
+fdt set /l4 kernel <$l4kaddr> && \
+fdt set /l4 sigma0 <$l4s0addr> && fdt set /l4 roottask <$l4rootaddr> && \
+fdt set /l4 dbgcon \"\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest\""
+# boot
+
+echo "$nodes" | ${KHDOCMD} writecon "bootm \$loadaddr - \$fdtbootaddr"
+

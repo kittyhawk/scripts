@@ -1,0 +1,273 @@
+#!/bin/bash
+set -x
+
+function setfdtdate
+{
+    local now=$(date -u)
+    local year=$(date -u -d "$now" +"%-Y")
+    local fdtdate="$(printf 'fdt mknode / rtc && fdt set /rtc second "[00 00 00 %02x]" && fdt set /rtc minute "[00 00 00 %02x]" && fdt set /rtc hour "[00 00 00 %02x]" && fdt set /rtc month "[00 00 00 %02x]" && fdt set /rtc mday "[00 00 00 %02x]" && fdt set /rtc year "[00 00 %02x %02x]"\n' `date -u -d "$now" +"%-S %-M %-H %-m %-d"` $(( $year / 256 )) $(( $year % 256 )))"
+    echo "$1" | khdo write "$fdtdate"
+    return 1;
+}
+
+function interactive
+{
+  if [[ -n $INTERACTIVE ]]
+  then
+    message="$1 ... Press <enter> ..."
+    echo $message
+    read
+  fi
+}
+
+
+function usage
+{
+   echo "$0 [-i] [-w] [-L] [-n] [-m number] [-c count] [ -r KHROOT ] [-u username] [-d path] [-p preload] [-P preloadno] [-s seed]"
+   echo "   -i interactive mode"
+   echo "   -w no windows"
+   echo "   -L start up login windows at end of non-interactive mode even if -w specified"
+   echo "   -n netid of existing memcached servers"
+   echo "   -m number of new memcached servers"
+   echo "   -c number of aoe clients"
+   echo "   -r khroot directory"
+   echo "   -u user" 
+   echo "   -p preload NFS disk"
+   echo "   -P number of expected disk clients (refcnt)"
+   echo "   -s disk seed" 
+}
+
+origargs="$@"
+optcount=0
+
+export MCPRELOADNO=1
+
+while getopts "iwpP:n:m:c:u:r:s:h" OPT
+do 
+  case $OPT in
+    ("i") export INTERACTIVE=1; (( optcount=optcount + 1));;
+    ("w") export NOWINDOWS=1; (( optcount=optcount + 1));;
+    ("p") export MCPRELOAD=1; (( optcount=optcount + 1));;
+    ("P") export MCPRELOADNO="$OPTARG"; (( optcount=optcount + 2));;
+    ("n") export MCNETID="$OPTARG"; (( optcount=optcount + 2));;
+    ("m") export NUMMEMC="$OPTARG"; (( optcount=optcount + 2));;
+    ("c") export NUM="$OPTARG"; (( optcount=optcount + 2));;
+    ("u") export KHUSER="$OPTARG"; (( optcount=optcount + 2));;
+    ("r") export KHROOT="$OPTARG"; (( optcount=optcount + 2));;
+    ("s") export MCSEED="$OPTARG"; (( optcount=optcount + 2));;
+    ("h") usage; exit -1;;
+  esac
+done
+ 
+shift $optcount
+
+COMMAND=$1
+if [[ -z $COMMAND ]]
+then
+   COMMAND="plain"
+fi 
+
+if [[ -z $KHROOT ]]
+then
+  KHROOT=$HOME/khroot
+fi 
+
+if [[ -z $KHUSER ]]
+then
+  KHUSER=$USER
+fi
+
+if [[ -z $NUM ]]
+then
+   NUM=1
+fi
+
+APPDIR=$KHROOT/appliances/memcapp
+MCFSSERVER=$USER@172.17.3.12
+MCFSPATH=$APPDIR
+MCFSTYPE=ssh
+
+if [[ -z $khctlserver ]]
+then 
+  if [[ -a /proc/device-tree/u-boot-env/khctleth0ipaddr ]]
+  then
+      khctlserver=$(cat /proc/device-tree/u-boot-env/khctleth0ipaddr)
+      MEMCINFODIR=$APPDIR/memcinfo${khctlserver##*.}
+  else
+      echo "ERROR: khctlserver is not set" >&2
+      exit -1
+  fi
+fi
+
+MEMCINFODIR=$APPDIR/memcinfo${khctlserver##*.}
+if [[ ! -d $MEMCINFODIR ]]
+then
+   if [[ ! -h $MEMCINFODIR || ! -d $(readlink $MEMCINFODIR) ]]
+   then
+       if [[ ! -e $MEMCINFODIR ]]
+       then
+	   mkdir $MEMCINFODIR
+       else
+	   echo "ERROR: $MEMCINFODIR is not a directory" >&2
+	   exit -1
+       fi
+   fi
+fi
+
+if [[ -n $NOWINDOWS ]]
+then
+  # no windows implies not being interactive
+  unset INTERACTIVE
+fi
+
+IDFILE=$APPDIR/id_dsa
+if [[ $COMMAND = "bench" ]] 
+then
+    MEMCBENCHCONF=$MEMCINFODIR/memcbench.conf
+    if [[ ! -a $MEMCBENCHCONF ]]
+	then
+	echo "ERROR: config file for memcbench does not exist"
+	exit 0
+    fi
+    if [[ -z $(cat $MEMCBENCHCONF | grep slap) ]]
+    then
+	APPKERN=$APPDIR/memcapp-uImage
+	BIGPHYS=384
+    else
+        APPKERN=$APPDIR/memcappbench-uImage
+        BIGPHYS=650
+        echo Using special kernel with lots of bigphys...
+    fi
+else
+    APPKERN=$APPDIR/memcapp-uImage
+fi
+APPIMG=$APPDIR/memcapp.gz.uimg
+
+if [[ ! -a $IDFILE ]]
+then
+   echo "ERROR: $IDFILE does not exist"
+   exit 0
+fi
+
+if [[ ! -a $APPKERN ]] 
+then
+  echo "ERROR: $APPKERN does not exist"
+  exit 0
+fi
+
+if [[ ! -a $APPIMG ]] 
+then
+  echo "ERROR: $APPIMG does not exist"
+  exit 0
+fi
+
+interactive "To start by acquiring memcached nodes"
+
+if [[ -n $NUMMEMC ]]
+then
+  whenout=/tmp/$KHUSER.$$.wout
+  if [[ -z $MCNETID ]]
+  then
+    mcs=$(khgetmc -w -u $KHUSER -c $NUMMEMC)
+    MCNETID=$(echo "$mcs" | khdo pernetcmd "echo %if% %net%" | grep eth0)
+    MCNETID=${MCNETID##* }
+  else
+     mcs=$(khgetmc -n $MCNETID -u $KHUSER -c $NUMMEMC)
+  fi
+  if [[ -z $mcs ]]
+  then
+    echo "ERROR: failed to acquire $NUM nodes for memcached servers" >&2
+    exit -1
+  fi
+  when "bash-3.1# " /dev/null  ssh $mcscon> $whenout &
+  wpid=$(jobs -p %%)
+  sleep 0.5
+  if [[ -z $NOWINDOWS ]]
+  then
+    echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x8+0+10\" "mc$COMMAND${khctlserver##*.}" &"
+  fi
+fi
+
+if [[ -z $MCNETID ]] 
+then
+  MCNETID=$(khmcctl -d $MEMCINFODIR "print id")
+  if [[ -z $MCNETID ]] 
+  then 
+    echo Unspecified list of memcached servers.
+    exit 1
+  fi
+fi 
+
+MCSERVERS=$(khmcctl -d $MEMCINFODIR -n $MCNETID )
+
+if [[ -z $MCSERVERS ]] 
+then
+  echo Unspecified list of memcached servers.
+  exit 1
+fi 
+
+
+interactive "To start by acquiring app nodes"
+
+whenout=/tmp/$KHUSER.$$.wout
+
+app=$(khget -x -i -n $MCNETID $KHUSER $NUM)
+appcon=$(echo "$app" | khdo concmd "echo %con%")
+echo "APP INFO: $app" >&2
+
+echo "$app" | khdo loadkernel $APPKERN
+echo "$app" | khdo loadramdisk $APPIMG
+echo "$app" | khdo write 'setenv eth1 "$iip $imask" && setenv eth2 "$p0ip $p0mask"'
+echo "$app" | khdo write "setenv mc_iface eth2"
+echo "$app" | khdo write "setenv mc_fstype $MCFSTYPE"
+echo "$app" | khdo write "setenv mc_fsserver $MCFSSERVER"
+echo "$app" | khdo write "setenv mc_fspath $MCFSPATH"
+echo "$app" | khdo write "setenv mc_infodir memcinfo${khctlserver##*.}"
+echo "$app" | khdo write "setenv mc_servers $MCSERVERS"
+echo "$app" | khdo write "setenv mc_preloadno $MCPRELOADNO"
+echo "$app" | khdo write "setenv mc_seed $MCSEED"
+
+
+case $COMMAND in
+ ("udpsync") 
+    echo "$app" | khdo write "setenv mc_udpsync 1" 
+    ;;
+ ("kcompile") echo "$app" | khdo write "setenv mc_kcompile 1" ;;
+ ("chroot")   echo "$app" | khdo write "setenv mc_chroot 1" ;;
+ ("bench")    
+    echo "$app" | khdo write "setenv mc_bench 1"
+    echo "$app" | khdo write "setenv mc_bsyncs $UDPSYNCSERVER"
+    #echo "$app" | khdo write "setenv mc_bbuffer 1"
+    while read LINE
+    do 
+      echo "$app" | khdo write "setenv $LINE"
+    done < $MEMCBENCHCONF ;;
+ ("plain")   echo "$app" | khdo write "setenv mc_plain 1" ;;
+esac
+
+if [[ -z $BIGPHYS ]]
+then
+   export BIGPHYS=256
+fi
+
+setfdtdate "$app"
+
+let BIGPHYS*=256 
+echo "$app" | khdo write "setenv bootargs root=/dev/ram0 rw bigphysarea=$BIGPHYS console=bgtty0,\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest init=/init ip=\$eth0ip:\$serverip:\$sitegate:\$sitemask::eth0:off"
+echo "$app" | khdo write 'setenv ramfsarg $ramfsaddr'
+echo "$app" | khdo write "setenv mc_client 1"
+echo "$app" | khdo write "run boot"
+
+if [[ -z $INTERACTIVE ]]
+then
+  wait $wpid
+  echo "$app" | khdo write "hostname APP-$KHUSER"
+fi
+
+if [[ -z $NOWINDOWS ]]
+then
+  echo "$app" | khdo concmd "khxcon %con% \"-geometry 80x8+0+700\" "mc$COMMAND${khctlserver##*.}" &"
+fi
+
+echo "$app" > $MEMCINFODIR/mc$COMMAND${khctlserver##*.}
+

@@ -1,0 +1,128 @@
+#!/bin/bash
+set -x
+
+NAME=bootl4
+VERSION=0.1
+
+declare -i launchcon=1
+declare -i verbose=0
+user=$USER
+
+kernel=powerpc-kernel
+sigma0=sigma0
+kickstart=kickstart.uimage
+roottask=khvmm
+
+kerneladdr=1400000
+sigma0addr=1500000
+roottaskaddr=1600000
+moduleaddr=1700000
+ubootscriptaddr=20000000
+linuxaddr=21000000
+ramdiskaddr=22000000
+
+function help()
+{
+    echo -e "\`$NAME' boots a set of nodes with L4\n\n"		\
+	    "Usage: $NAME [num]\n"				\
+	    " -r <roottask>     set roottask\n"			\
+	    " -l <linux>	load linux\n"			\
+	    " -d <disk>		load ramdisk\n"			\
+	    " -m <module>	load module\n"			\
+	    " -s <script>	load uboot script\n"		\
+	    " -u <user>         user allocating nodes\n"	\
+	    " -c                launch console window\n"	\
+	    " -v                verbose kickstart\n"		\
+	    " -h                show this help statement\n"
+}
+
+optcount=0;
+while getopts "u:r:m:l:d:s:chv" OPT
+do
+  case $OPT in
+    ("r") roottask="$OPTARG"; (( optcount+=2 ));;
+    ("m") module="$OPTARG"; (( optcount+=2 ));;
+    ("l") linux="$OPTARG"; (( optcount+=2 ));;
+    ("d") ramdisk="$OPTARG"; (( optcount+=2 ));;
+    ("s") ubootscript="$OPTARG"; (( optcount+=2 ));;
+    ("u") user="$OPTARG"; (( optcount+=2 ));;
+    ("c") launchcon=1; (( optcount+= 1 ));;
+    ("v") verbose=1; (( optcount+= 1));;
+    ("h") help; exit -1;;
+  esac
+done
+
+shift $optcount
+
+cd ~/boot/
+
+for i in $kernel $sigma0 $kickstart $roottask $module
+  do if [[ ! -a $i ]]
+  then
+      echo "file \"$i\" not found"
+      exit -1
+  fi
+done
+
+a0="$(khget $user $1)"
+if (( $? != 0 ))
+then
+  echo "Node allocation failed ($a0)"
+  exit -1
+fi
+
+#if (( launchcon != 0 )); then
+#    echo "$a0" | khdo concmd "khxcon %con% -t \"-echo -echonl -echoprt -echoke -icrnl -icanon time 0 min 1\" \"-geometry 80x6+0+700\" "l4{khctlserver##*.}" &"
+#fi
+
+if (( launchcon != 0 )); then
+    echo "$a0" | khdo concmd "khxconl4 -t \"-echo -echonl -echoprt -echoke -icrnl -icanon time 0 min 1\" %con% &"
+fi
+
+echo "$a0"
+
+echo "$a0" | khdo loadkernel $kickstart
+echo "$a0" | khdo loadfile $kerneladdr $kernel
+echo "$a0" | khdo loadfile $sigma0addr $sigma0
+echo "$a0" | khdo loadfile $roottaskaddr $roottask
+
+# FDT manipulation
+setfdtcmd="fdt mknode / l4 && fdt set /l4 kernel <$kerneladdr> && fdt set /l4 sigma0 <$sigma0addr> && fdt set /l4 roottask <$roottaskaddr>"
+echo "$a0" | khdo write "$setfdtcmd"
+
+declare -i modnum=0
+for i in $module
+do
+  echo "$a0" | khdo loadfile $moduleaddr $i
+  echo "$a0" | khdo write "fdt set /l4 module$modnum <$moduleaddr>"
+  (( modnum++ ))
+done
+
+if [[ -n $linux && -f $linux ]]
+then
+  echo "$a0" | khdo loadfile $linuxaddr $linux
+fi
+
+if [[ -n $ramdisk && -f $ramdisk ]]
+then
+  echo "$a0" | khdo loadfile $ramdiskaddr $ramdisk
+  #echo "$a0" | khdo loadramdisk $ramdisk
+fi
+
+if [[ -n $ubootscript && -f $ubootscript ]]
+then
+  echo "$a0" | khdo loadfile $ubootscriptaddr $ubootscript
+fi
+
+# set the kernel debugger output
+echo "$a0" | khdo write "fdt set /l4 dbgcon \$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest"
+
+if (( verbose != 0 )); then 
+  echo "$a0" | khdo write "fdt set /l4 kickstart verbose"
+fi
+
+#echo "press key to boot..."
+#read
+echo "$a0" | khdo write "bootm \$loadaddr - \$fdtbootaddr"
+echo "$a0" 
+echo "$a0"  > ~/bootl4.log
