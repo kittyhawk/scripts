@@ -46,8 +46,8 @@ uboot/board/bluegene/scripts/khctl.hush.uimg.elf: uboot/board/bluegene/scripts/k
 uboot/board/bluegene/scripts/khctl.hush: uboot
 
 uboot/.done: uboot
-	$(MAKE) -C uboot bgp_config
-	$(MAKE) -C uboot
+	ARCH=ppc $(MAKE) -C uboot bgp_config 
+	ARCH=ppc $(MAKE) -C uboot 
 	GIT_DIR=uboot/.git git log -1 > $@
 
 uboot:
@@ -55,8 +55,8 @@ uboot:
 	touch uboot/board/bluegene/bgp/fdt.S
 
 linux/.done: uboot/.done linux
-	ARCH=powerpc $(MAKE) -C linux bgp_defconfig
-	ARCH=powerpc $(MAKE) -C linux
+	ARCH=powerpc   $(MAKE) -C linux bgp_defconfig
+	ARCH=powerpc  $(MAKE) -C linux 
 	GIT_DIR=linux/.git git log -1 > $@
 
 linux:
