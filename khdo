@@ -11,6 +11,8 @@
 #  
 #####################################
 
+if [[ $BASH_VERSION != 3.1.* ]]; then shopt -s compat31; fi
+
 declare -r KHPIPEFILEPREFIX=${KHPIPE_FILEPREFIX:-/tmp/$USER}
 
 declare pipestagedatafile
@@ -56,7 +58,13 @@ processargs()
   dofunc=$1
 }
 
-function write 
+# deprecated for backwards compatibility
+write()
+{
+  writecon $*
+}
+
+function writecon
 {
   data="$*"
 
@@ -64,6 +72,11 @@ function write
   then
      echo "$data" | ssh -T -q $console
   fi
+}
+
+function readcon
+{
+  TERM=KHREAD exec ssh -ttt -q $console < /dev/null 2> /dev/null
 }
 
 function writefile
