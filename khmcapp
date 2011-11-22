@@ -184,7 +184,7 @@ then
   sleep 0.5
   if [[ -z $NOWINDOWS ]]
   then
-    echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x8+0+10\" "mc$COMMAND${khctlserver##*.}" &"
+    echo "$mcs" | khdo concmd "khxcon -s "mc$COMMAND${khctlserver##*.}" %con% \"-geometry 80x8+0+10\" &"
   fi
 fi
 
@@ -266,7 +266,7 @@ fi
 
 if [[ -z $NOWINDOWS ]]
 then
-  echo "$app" | khdo concmd "khxcon %con% \"-geometry 80x8+0+700\" "mc$COMMAND${khctlserver##*.}" &"
+  echo "$app" | khdo concmd -s "mc$COMMAND${khctlserver##*.}" "khxcon %con% \"-geometry 80x8+0+700\" &"
 fi
 
 echo "$app" > $MEMCINFODIR/mc$COMMAND${khctlserver##*.}

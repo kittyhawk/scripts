@@ -195,7 +195,7 @@ echo "$mcs" | khdo write "run boot"
 
 if [[ -z $NOWINDOWS ]]
 then
-  echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x6+0+700\" "mc${khctlserver##*.}" &"
+  echo "$mcs" | khdo concmd "khxcon -s "mc${khctlserver##*.}" %con% \"-geometry 80x6+0+700\"  &"
 fi
 
 echo "$mcs"

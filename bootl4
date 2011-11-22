@@ -71,12 +71,8 @@ then
   exit -1
 fi
 
-#if (( launchcon != 0 )); then
-#    echo "$a0" | khdo concmd "khxcon %con% -t \"-echo -echonl -echoprt -echoke -icrnl -icanon time 0 min 1\" \"-geometry 80x6+0+700\" "l4{khctlserver##*.}" &"
-#fi
-
 if (( launchcon != 0 )); then
-    echo "$a0" | khdo concmd "khxconl4 -t \"-echo -echonl -echoprt -echoke -icrnl -icanon time 0 min 1\" %con% &"
+    echo "$a0" | khdo concmd "khxcon  -s "l4{khctlserver##*.}"  -t \"-echo -echonl -echoprt -echoke -icrnl -icanon time 0 min 1\" %con% &"
 fi
 
 echo "$a0"

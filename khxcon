@@ -1,27 +1,67 @@
 #!/bin/bash
-#set -x 
+set -x 
 KHQUITCON=0
 KHSSH=khssh
+SCREENNAME=""
+SETTY=""
+CON=""
 
-if [[ $1 = -N ]]
-then
-   shift
-   output=$(khget $@)
-   if (( $? == 0 ))
-   then
-      read con <<EOF
+function usage
+{
+    echo -e \
+	"\`$(basename $0)' [-N ] [-s <name>] con xtermargs\n"       \
+        "\n"                                                        \
+        "  -N \n"                                                   \
+        "  -s <name> use screen instead of xterm\n"                 \
+	" -t <tty setting>  tty settings\n"                         \
+        "  -h print this usage\n"
+}
+
+processargs()
+{
+    local    origargs="$@"
+    local -i optcount=0  
+    
+    while getopts "Ns:t:h" OPT
+      do 
+      case $OPT in
+          ("N") 
+	    output=$(khget $@)
+	    if (( $? == 0 ))
+		then
+		read CON <<EOF
 $output 
 EOF
-     echo "$output"
-     echo "connecting to $con"
-   else 
-     echo "$output"
-     exit -1
-   fi
-else
-   con="$1"
-   xtermargs="$2"
-fi
+		echo "$output"
+		echo "Connecting to $CON "
+	    else 
+		echo "$output"
+		exit -1
+	    fi
+	    (( optcount=optcount + 1 ))
+	    ;;
+          ("s") SCREENNAME=$OPTARG; (( optcount=optcount + 2 ));;
+	  ("t") SETTY="stty $OPTARG;"; (( optcount+=2 ));;
+          ("h") usage; exit -1;;
+      esac
+    done
+
+    shift $optcount
+    
+    if [[ -z $CON ]]
+    then
+	CON="$1"
+	xtermargs="$2"
+    fi
+
+}
+
+processargs "$@"
 
     
-exec xterm  $xtermargs  -fg orange -bg black -e bash -c "echo starting console: $con connection;$KHSSH $con; echo Console connection terminated; if (( $KHQUITCON == 1)); then echo  Quitting in 20 seconds; sleep 20; exit -1; fi; echo Press \<ctl-c\> to close window; read"
+if [[ -z $SCREENNAME ]]
+then
+    exec xterm  $xtermargs  -fg orange -bg black -e bash -c "$SETTY echo starting console: $CON connection;$KHSSH $CON; echo console connection terminated; if (( $KHQUITCON == 1)); then echo  Quitting in 20 seconds; sleep 20; exit -1; fi; echo Press \<ctl-c\> to close window; read"
+else
+    screen -d -m -S $SCREENNAME bash -c "$SETTY echo starting console: $CON connection;$KHSSH $CON; echo console connection terminated; if (( $KHQUITCON == 1)); then echo  Quitting in 20 seconds; sleep 20; exit -1; fi; echo Press \<ctl-c\> to close window; read"
+fi
