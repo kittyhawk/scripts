@@ -82,7 +82,12 @@ then
    NUM=1
 fi
 
-APPDIR=$KHROOT/appliances/memcapp
+if [[ -z $NUMENC ]]
+then
+   NUMENC=1
+fi
+
+APPDIR=$HOME/Studienarbeit/files
 MCFSSERVER=$USER@172.17.3.12
 MCFSPATH=$APPDIR
 MCFSTYPE=ssh
@@ -165,6 +170,10 @@ interactive "To start by acquiring memcached nodes"
 
 if [[ -n $NUMMEMC ]]
 then
+    if [ -d $MEMCINFODIR ]; then
+#	echo "removing old infodir $MEMCINFODIR"
+	rm -rf $MEMCINFODIR
+    fi
   whenout=/tmp/$KHUSER.$$.wout
   if [[ -z $MCNETID ]]
   then
@@ -182,10 +191,10 @@ then
   when "bash-3.1# " /dev/null  ssh $mcscon> $whenout &
   wpid=$(jobs -p %%)
   sleep 0.5
-  if [[ -z $NOWINDOWS ]]
-  then
-    echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x8+0+10\" "mc$COMMAND${khctlserver##*.}" &"
-  fi
+#  if [[ -z $NOWINDOWS ]]
+#  then
+#    echo "$mcs" | khdo concmd "khxcon %con% \"-geometry 80x8+0+10\" "mc$COMMAND${khctlserver##*.}" &"
+#  fi
 fi
 
 if [[ -z $MCNETID ]] 
@@ -214,6 +223,11 @@ whenout=/tmp/$KHUSER.$$.wout
 app=$(khget -x -i -n $MCNETID $KHUSER $NUM)
 appcon=$(echo "$app" | khdo concmd "echo %con%")
 echo "APP INFO: $app" >&2
+
+if [[ -z $NOWINDOWS ]]
+then
+  echo "$app" | khdo concmd "khxcon %con% \"-geometry 80x8+0+700\" "mc$COMMAND$$
+fi
 
 echo "$app" | khdo loadkernel $APPKERN
 echo "$app" | khdo loadramdisk $APPIMG
@@ -247,13 +261,15 @@ esac
 
 if [[ -z $BIGPHYS ]]
 then
-   export BIGPHYS=256
+   export BIGPHYS=460 
+   #This value has been experimentally determined. Anything higher WILL 
+   #crash the kernel. DO NOT RAISE!
 fi
 
 setfdtdate "$app"
 
 let BIGPHYS*=256 
-echo "$app" | khdo write "setenv bootargs root=/dev/ram0 rw bigphysarea=$BIGPHYS console=bgtty0,\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest init=/init ip=\$eth0ip:\$serverip:\$sitegate:\$sitemask::eth0:off"
+echo "$app" | khdo write "setenv bootargs root=/dev/ram0 rw bigphysarea=$BIGPHYS console=bgtty0,\$bgtty_sendid,\$bgtty_rcvid,\$bgtty_dest init=/linuxrc ip=\$eth0ip:\$serverip:\$sitegate:\$sitemask::eth0:off"
 echo "$app" | khdo write 'setenv ramfsarg $ramfsaddr'
 echo "$app" | khdo write "setenv mc_client 1"
 echo "$app" | khdo write "run boot"
@@ -264,10 +280,28 @@ then
   echo "$app" | khdo write "hostname APP-$KHUSER"
 fi
 
-if [[ -z $NOWINDOWS ]]
-then
-  echo "$app" | khdo concmd "khxcon %con% \"-geometry 80x8+0+700\" "mc$COMMAND${khctlserver##*.}" &"
-fi
+#if [[ -z $NOWINDOWS ]]
+#then
+#  echo "$app" | khdo concmd "khxcon %con% \"-geometry 80x8+0+700\" "mc$COMMAND${khctlserver##*.}" &"
+#fi
 
 echo "$app" > $MEMCINFODIR/mc$COMMAND${khctlserver##*.}
 
+export SERVERS=$(echo $app | sed s/\n/,/g)
+
+# prints the addresses of the currently active memcached servers and
+# stores them in $MEMCINFODIR/mc_servers
+sleep 10
+if [ -f $MEMCINFODIR/mc_servers ]; then
+    servers=$(cat $MEMCINFODIR/mc_servers), 
+else    
+    servers=
+fi
+mip=$(echo "$app" | khdo peripcmd "echo %ip%")
+for i in $mip; do
+    echo "ssh-ing into the node..."
+    servers="$(ssh $i '/sbin/ifconfig eth1 | grep -m 1 -o -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | sed -n "1p"'),$servers"
+done
+
+echo "${servers%,}" > $MEMCINFODIR/mc_servers
+echo "export MEMCACHED_SERVERS=${servers%,}"
