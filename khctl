@@ -11,6 +11,8 @@
 # main interface function is acquireNodes
 #  
 #####################################
+if [[ $BASH_VERSION != 3.1.* ]]; then shopt -s compat31; fi
+
 PATH=$PATH:/sbin
 
 declare -r KHBASEDIR=${KHCTL_BASEDIR:-/home/kh}
@@ -37,6 +39,8 @@ declare -r KHRANKFILE=${KHCTL_RANKFILE:-/proc/device-tree/u-boot-env/bgp_rank}
 declare -r KHCTRLTTY=${KHCTL_CTRLTTY:-/dev/bgtty0}
 declare -r KHCTRLID=${KHCTL_CTRLID:-0}
 declare -r KHTTYMAJOR=${KHCTL_TTYMAJOR:-230}
+declare -r KHXIPFILE=${KHCTL_XIPFILE:-/proc/device-tree/u-boot-env/xip}
+declare -r KHNATIPFILE=${KHCTL_NATFILE:-/proc/device-tree/u-boot-env/natip}
 
 declare -r FREEOWNER='_FREE_'
 declare -r FREEPNET=$KHFREENETID
@@ -48,6 +52,13 @@ declare BUFFERVAR
 declare -i BUFFERTTY=1
 
 typeset dofunc
+
+function getNatIP
+{
+    if [[ -a $KHNATIPFILE ]]; then
+	cat $KHNATIPFILE
+    fi
+}
 
 function myIPAddrs
 {
@@ -156,7 +167,7 @@ readUbootResponse()
         return -1
       fi
    fi
-  
+   touch ${respfile}.running
    while read line
    do
      if [[ "$line" =~ "^nodeinfo: .*" ]]
@@ -170,6 +181,7 @@ readUbootResponse()
      fi
    done < $tty
    printf "$response" > $respfile
+   rm ${respfile}.running
    return 0
 }
 
@@ -186,11 +198,18 @@ gatherUbootResponse()
       echo "USAGE: $FUNCNAME <tty> <num> <respfile>" >&2
       return -1
    fi
-
+   
+   if [[ -a ${respfile}.running ]] 
+   then
+      rm ${respfile}.running
+   fi
    readUbootResponse $tty $num $respfile &
    # give the child some time to start and get the tty open
    # before we do any writes so that we capture all responses
-   sleep 0.5
+   while [[ ! -a ${respfile}.running ]]
+   do
+      sleep 0.5  
+   done
    readpid=$(jobs -p %%)
    disown %%
    echo $readpid > $respfile.pid
@@ -477,7 +496,11 @@ configNodes()
   flushTTY $tty
 
   #added eth0ip as a kludge to make demo easier
-  ubootnodeinfo=$(getUbootNodeInfo $tty $num "\$eth0ip")
+  if [[ -n $(getNatIP) ]]; then
+      ubootnodeinfo=$(getUbootNodeInfo $tty $num "\$eth0ip \$ionode_uni \$ionode_siteip \$bgp_rankinpset")
+  else
+      ubootnodeinfo=$(getUbootNodeInfo $tty $num "\$eth0ip")
+  fi
   if (( $? != 0 ))
   then 
      echo "ERROR: $FUNCNAME: getUbootNodeInfo failed to confirm nodes configured\n" >&2 
@@ -559,8 +582,16 @@ function createConUser
   cat >$shell <<EOF
 #!/bin/bash
 stty raw -clocal cread -echo -echok -echoe < $tty
+
+if [[ \$TERM = KHREAD ]]
+then
+  exec cat $tty
+fi
+
 if tty > /dev/null
 then
+# getting closer but still needs more
+#  stty raw -clocal cread -echo -echok -echoe
   echo "$conuser: Console"
   cat $tty > /dev/tty & 
 fi
@@ -588,6 +619,7 @@ assignNodes()
   local i
   local ip
   local configdesc
+  local natip
 
   if createCon $khuser $conid "${nodes[*]}"
   then
@@ -600,14 +632,20 @@ assignNodes()
           then
               conip=${SSH_CONNECTION% *}
               conip=${conip##* }
-              echo $conuser@$conip
-          else
-              for i in $(myInterfaces)
-              do
+              natip=$(getNatIP)
+	      if [[ -n $natip ]]; then
+		  if [[ $conip = $(cat $KHXIPFILE) ]]; then
+		      conip=$natip
+		  fi
+	      fi
+	      echo $conuser@$conip
+	  else
+	      for i in $(myInterfaces)
+		do
                 ip=$(myIPAddrs $i)
                 if [[ -n $ip ]]
-                then
-                  echo $conuser@$ip
+		    then
+		    echo $conuser@$ip
                 fi
               done
           fi

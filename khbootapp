@@ -1,0 +1,354 @@
+#!/bin/bash
+#set -x
+#####################################
+#
+#  Boston University
+#  Project kittyhawk
+#  
+#  simple script for booting nodes in various
+#  configurations of networks.  Originally derived from bootramdisk
+#  but now with signifiant modifications
+#  
+#####################################
+
+if [[ $BASH_VERSION != 3.1.* ]]; then shopt -s compat31; fi
+
+declare num
+declare disk
+declare addresses
+declare port
+declare sleep
+declare nettype
+declare gwapp
+declare gwkey
+declare kernel
+declare cookieprefix
+declare workercookie
+declare gwcookie
+# to support tunnelling you must set to the host
+# that you want tunnels made through
+#declare tunhost=bgpsn2.us.ibm.com
+declare tunhost
+
+function usage
+{
+    echo -e "\`$(basename $0)' boots ramdisks\n"                           \
+            "\n"                                                           \
+            "usage: $(basename $0) [-x|-i|-p] [-k gwpublickey] [-u user] [-c cookiefileprefix] -K [kernel] NUM DISK [ADDRESSES] [PORT] [SLEEP]\n" \
+            "\n"                                                           \
+            "example: $(basename $0) 1 http://kittyhawk.bu.edu/Appliances/worker.cpio\n"
+
+}
+
+defaults()
+{
+    if onBG; then 
+       nettype=internal
+    else 
+       nettype=external
+    fi
+    sleep=45
+}
+
+processargs()
+{
+    local    origargs="$@"
+    local -i optcount=0  
+    
+    while getopts "ixpk:K:u:c:h" OPT
+      do 
+      case $OPT in
+          ("i") nettype=internal; (( optcount=optcount + 1));;
+          ("x") nettype=external; (( optcount=optcount + 1));;
+          ("p") nettype=private;  (( optcount=optcount + 1));;
+          ("k") gwkey=$OPTARG; (( optcount=optcount + 2 ));;
+          ("u") USER=$OPTARG; (( optcount=optcount + 2 ));;
+          ("K") kernel=$OPTARG; (( optcount=optcount + 2));;
+          ("c") cookieprefix=$OPTARG; (( optcount=optcount + 2 ));;
+          ("h") usage; exit -1;;
+      esac
+    done
+
+    shift $optcount
+
+    if [ $# -eq 0 -o -f "$1" ]; then
+            usage
+            exit 1
+    fi
+
+    num="$1"
+    disk="$2"
+    addresses="$3"
+    port="$4"
+    sleep="$5"
+
+    if [[ -n $kernel && ! -a $kernel ]]; then
+	echo "ERROR: $kernel does not exist" > /dev/stderr
+        exit 1
+    fi
+
+    if [[ -n $kernel && $(file -b $kernel) != "u-boot/PPCBoot image" ]]; then
+      echo "ERROR: $kernel does not seem to be u-boot  image" > /dev/stderr
+      exit 1
+    fi
+}
+
+onBG()
+{
+  [[ -a /proc/device-tree/u-boot-env ]]
+  return $?
+}
+
+setfdtdate() 
+{
+    local khalloc="$1"
+    local now=$(date -u)
+    local year=$(date -u -d "$now" +"%-Y")
+    local fdtdate="$(printf 'fdt mknode / rtc && fdt set /rtc second "[00 00 00 %02x]" && fdt set /rtc minute "[00 00 00 %02x]" && fdt set /rtc hour "[00 00 00 %02x]" && fdt set /rtc month "[00 00 00 %02x]" && fdt set /rtc mday "[00 00 00 %02x]" && fdt set /rtc year "[00 00 %02x %02x]"\n' `date -u -d "$now" +"%-S %-M %-H %-m %-d"` $(( $year / 256 )) $(( $year % 256 )))"
+    echo "$khalloc" | khdo write "$fdtdate"
+}
+
+function getdisk
+{
+    echo $disk | grep -q 'http://' && {
+        cpio=$(echo $disk | sed 's,.*/,,')
+        rm -f $cpio
+        echo "fetching $disk"
+        wget -q $disk || exit 1
+        disk=$cpio
+    }
+
+    file $disk | grep -q "gzip compressed data" && {
+        mkramdiskelf $disk || exit 1
+        disk=${disk}.uimg
+    }
+
+    file $disk | grep -q "cpio archive" && {
+        mkramdiskelf $disk || exit 1
+        disk=${disk}.gz.uimg
+    }
+
+    test -f $disk || {
+        echo "error: cannot find $disk"
+        exit 1
+    }
+
+    if [[ $(file -b $disk) != "u-boot/PPCBoot image" ]]; then
+      echo "ERROR: disk does not seem to be u-boot  image" > /dev/stderr
+    fi
+}
+
+function recaddrs
+{
+    local khalloc="$1"
+
+    addrs="$(echo "$khalloc" | khdo peripcmd "echo %ip%")"
+    if [[ -n $addrs ]]; then
+        if [ -n "$addresses" ]; then
+           echo "$addrs" >> $addresses
+           sync
+	fi
+	echo $addrs
+    else
+       echo "Boot failed"
+       exit 1
+    fi       
+}
+
+
+function configeth
+{
+    local khalloc="$1"
+    local net="$2"
+    local ifs="$3"
+    local con=$(echo "$khalloc" | khdo concmd "echo %con%")
+    local wpid
+    local whenout=$(mktemp /tmp/whenout.XXX)
+    local gwiip
+    local gwimask
+
+    for i in $ifs
+    do
+       itype=${i%%:*}
+       ethif=${i##*:}
+       if [[ $itype = "External" ]]; then   
+         echo "$khalloc" | khdo write "setenv $ethif \"\$xip \$xmask\""
+       else 
+         if [[ $itype = "Internal" ]]; then   
+           echo "$khalloc" | khdo write "setenv $ethif \"\$iip \$imask\""
+         else
+	   echo "$khalloc" | khdo write "setenv $ethif \"\$p0ip \$p0mask\""
+         fi
+       fi
+    done
+    when "U-Boot" /dev/null  ssh $con > $whenout &
+    wpid=$(jobs -p %%)
+    # FIXME : and a real handshake here
+    sleep 0.5
+    echo "$khalloc" | khdo write "echo ips=\$iip \$p0ip; ver"
+    wait $wpid
+
+    while read line 
+    do
+       if [[ "$line" =~ "^ips=(.*) (.*)$" ]]; then 
+           gwiip=${BASH_REMATCH[1]}; gwpip=${BASH_REMATCH[2]}
+       fi
+    done < $whenout
+    echo $gwiip $gwpip
+    rm $whenout
+}
+
+function bootnodes
+{
+    local khalloc="$1"
+    local rdisk="$2"
+    local kimage="$3"
+
+    if [[ -n $kimage ]]; then
+      echo "loading kernel: $kimage ..." > /dev/stderr
+      echo "$khalloc" | khdo loadkernel $kimage >/dev/null 2>&1
+    fi
+
+    echo "loading ramdisk: $rdisk ..." > /dev/stderr
+    echo "$khalloc" | khdo loadramdisk $rdisk >/dev/null 2>&1
+    setfdtdate "$khalloc"
+    echo "$khalloc" | khdo write 'imi $ramfsaddr && run kboot'
+}
+
+function pingnode
+{
+    local ip="$1"
+
+    echo -n "pinging $1 ... "
+    for ((i=0;i<16;i++)); do
+        ping -q -c 1 $ip >/dev/null 2>&1 && echo -n "alive" && break
+    done
+    echo
+}
+
+function mktunnel
+{
+    local ip="$1"
+
+    if [[ -n "$tunhost" && -n "$port" ]]; then
+      ssh -f -g -L $port:$ip:22 -o StrictHostKeyChecking=no $tunhost "sleep $sleep"
+      echo "ssh root@$tunhost -p $port" > ssh
+    fi
+}
+
+function gatewayedhosts
+{
+    local net="$1"
+    local numw
+    local workers
+    local gateway
+    local gwoaddrs
+    local gwxaddr
+    local gwiaddr
+
+    numw=$num
+    if (( $numw > 0 )); then
+        if [[ $net = "internal" ]]; then workers=$(khget -i $USER $numw); fi
+        if [[ $net = "private" ]]; then workers=$(khget $USER $numw); fi
+        echo "$workers" > $workercookie
+        recaddrs "$workers"
+        bootnodes "$workers" "$disk" "$kernel"
+        gateway=$(khget -x -i $USER 1)
+        echo "$gateway" > $gwcookie
+        gwxaddr=$(echo "$gateway" | khdo peripcmd "echo %ip%")
+        ifs=$(echo "$gateway" | khdo pernetcmd "echo %net%:%if%")
+        gwoaddrs="$(configeth "$gateway" $nettype "$ifs")"
+        gwiaddr=${gwoaddrs%% *}
+        if [[ -n "$addresses" ]]; then 
+          echo "$gwxaddr $gwoaddrs" >> $addresses
+        fi
+        echo $gwxaddr $gwoaddrs       
+        bootnodes "$gateway" "$gwapp" 
+        if onBG ; then
+	  pingnode $gwiaddr
+        else
+          pingnode $gwxaddr
+	fi
+        if [[ -n $gwkey ]]; then
+          echo "$gateway" | khdo writecon "echo '$gwkey' >> ~root/.ssh/authorized_keys"
+        fi
+        if ! onBG; then mktunnel $gwxaddr; fi
+    fi
+    return 0
+}
+
+function nogwhosts
+{
+    local net="$1"
+    if (( $num > 0 )); then
+      if [[ $net = "internal" ]]; then workers=$(khget -i $USER $num); fi
+      if [[ $net = "external" ]]; then workers=$(khget -x $USER $num); fi
+      if [[ -z $workers ]];then return -1; fi
+      echo "$workers" > $workercookie
+      recaddrs "$workers"
+      addrs=( $(echo "$workers" | khdo peripcmd "echo %ip%") )
+      bootnodes "$workers" "$disk" "$kernel"
+      if onBG && [[ $net = "external" ]]; then
+        echo "Skipping ping of external hosts from inside BG"
+      else
+        pingnode ${addrs[0]} 
+      fi
+      if ! onBG; then mktunnel $gwxaddr; fi
+    fi 
+    return 0 
+}
+
+function privatehosts
+{
+    return 0
+}
+
+# main
+defaults
+
+processargs "$@"
+
+if ! onBG && [[ -z "$khctlserver" ]]; then
+    echo "error: khctlserver environment variable must be set"
+    exit 1
+else
+    export khctlserver
+fi
+
+appdir=$(type -p $0)
+appdir=${appdir%/*}
+appdir=$appdir/../appliances
+gwapp=$appdir/khgw/khgw.cpio.gz.uimg
+
+if [[ ! -a $gwapp ]]; then
+    echo "error: can't find $gwapp your install seems broken"
+    exit -1
+fi
+
+if [[ -n $cookieprefix ]]
+then 
+  workercookie=${cookieprefix}.workers
+  gwcookie=${cookieprefix}.gw
+else
+  workercookie=${USER}.$num.workers
+  gwcookie=${USER}.$num.gw
+fi
+
+getdisk
+
+if [[ -n "$addresses" ]]
+then
+   cat /dev/null > $addresses
+fi
+
+case "$nettype" in
+"internal")
+   if onBG; then nogwhosts "internal"; else gatewayedhosts "internal"; fi;;
+"external") 
+   nogwhosts "external";; 
+"private")  
+   gatewayedhosts "private";;
+*) echo "ERROR: unknown nettype=$nettype" >&2; exit -1
+esac
+
+exit 0

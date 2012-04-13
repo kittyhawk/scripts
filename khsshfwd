@@ -1,0 +1,63 @@
+#!/bin/bash
+#set -x
+#####################################
+#
+#  Boston University
+#  Project kittyhawk
+#  
+#  simple script for createing port forwards in environments that
+#  the kittyhawk external networks on not bridged and require nating and port
+#  forwarding.
+#  Designed to run both on the nat server as well as foriegn machines that
+#  what to create an ssh port forward for a specific node on its nat server
+#  
+#####################################
+if [[ $BASH_VERSION != 3.1.* ]]; then shopt -s compat31; fi
+
+declare -r UBENVDIR=/proc/device-tree/u-boot-env
+declare -r NATSRVSSHPORT=2200
+declare -r SSHPORT=22
+declare -r NATSSHPORTBASE=$(( SSHPORT + 1 ))
+
+
+if [[ -a $UBENVDIR/bgp_isio && $(cat $UBENVDIR/bgp_isio) = 1 ]]; then
+  clientip=$1
+  clientrank=$2
+  if [[ -z $clientip || -z $clientrank ]]; then
+    echo "ERROR:  USAGE: $0 <clientip> <clientrankinpset>"
+    exit -1
+  fi
+  natsshport=$((clientrank + NATSSHPORTBASE))
+  mysiteip=$(cat $UBENVDIR/bgp_ioeth_ip)
+
+  if iptables -t nat -A PREROUTING -p tcp -d $mysiteip --dport $natsshport -j DNAT --to $clientip:$SSHPORT
+  then
+     echo "$mysiteip:$natsshport $clientip:$SSHPORT"
+  else
+     echo "ERROR: iptables command failed"
+     exit -1
+  fi
+else
+  if [[ $# == 0 ]]; then
+    if [[ -a $UBENVDIR/bgp_rankinpset ]]; then rankinpset=$(cat $UBENVDIR/bgp_rankinpset); fi
+    if [[ -a $UBENVDIR/xgate ]]; then natxip=$(cat $UBENVDIR/xgate); fi
+    if [[ -a $UBENVDIR/$UBENVDIR/xip ]]; then myxip=$(cat $UBENVDIR/xip); fi
+    if [[ -z $rankinpset || -z $natxip || -z $myxip ]]; then
+       echo "ERROR: can not determine defaults try explicitly specifying arguments"
+       echo "USAGE: $0 [<xip> <rankinpset> <natip>]"
+       exit -1
+    fi
+  else
+    if [[ $# != 3 ]]; then
+      echo "USAGE: $0 [<xip> <rankinpset> <natip>]"
+      exit -1
+    else
+      myxip=$1
+      myrankinpset=$2
+      natxip=$3
+    fi
+  fi
+  ssh -p $NATSRVSSHPORT root@$natxip scripts/khsshfwd $myxip $myrankinpset
+fi 
+
+exit 0
