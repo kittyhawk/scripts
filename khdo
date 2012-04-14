@@ -171,8 +171,8 @@ function peripcmd
   cmd=${cmd//\%ip\%/\$ip}
   for n in ${nodes[@]}
   do
-    ip=${nodeinfo[$n]}
-    ip=${ip##* }
+    [[ ${nodeinfo[$n]} =~ "^([0-9]+) ([0-9]+) ([0-9.]+)" ]]
+    ip=${BASH_REMATCH[3]}
     eval $cmd
   done
 }
